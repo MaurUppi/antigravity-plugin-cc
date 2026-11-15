@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (local, version still 2.0.0)
+
+Breaking: the model aliases `pro`, `pro-low`, `flash`, `flash-medium`,
+`flash-low`, `sonnet`, `opus` and `gpt-oss` are gone. They are now passed to
+agy verbatim, which falls back and fails the run.
+
+- agy 1.5.9: the prompt is the `--print` value (agy no longer reads stdin);
+  review prompts over 256 KB go to a file in the review worktree
+- Model aliases `hydrogen` (default `gemini-4-hydrogen-high`),
+  `hydrogen-xhigh`, `argon`; `agy models` ids are accepted
+- Reviews run with `--sandbox`, `proceed-in-sandbox` and `--add-dir` for one
+  shared cargo target dir (`REVIEW_CARGO_TARGET_DIR` in `lib/agy-cli.mjs`,
+  currently a machine-specific path)
+- `--base` and the detected default branch must be commits that share history
+  with HEAD; otherwise the review fails instead of approving an empty diff
+- A foreground review that did not run or returned unusable output exits 1; a
+  background one ends as `failed`
+- Background jobs record phases and a 15 s heartbeat with tool-call counts
+- A cancelled job stays `cancelled`; `result` marks its output as from a
+  stopped run
+
 ## 2.0.0
 
 Adaptation from the deprecated Gemini CLI to Antigravity (`agy`). Breaking: the
