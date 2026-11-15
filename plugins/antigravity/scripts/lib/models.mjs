@@ -1,30 +1,18 @@
-// Model IDs are agy display labels — the only form `agy --model` resolves.
+// Model IDs are agy display labels or `agy models` ids (agy 1.5.9 resolves ids).
 // Anything else silently falls back to agy's own default (Flash Medium);
 // the facade detects that via the propagated label in agy's log.
 export const MODELS = Object.freeze({
-  PRO_HIGH: "Gemini 3.1 Pro (High)",
-  PRO_LOW: "Gemini 3.1 Pro (Low)",
-  FLASH_HIGH: "Gemini 3.5 Flash (High)",
-  FLASH_MEDIUM: "Gemini 3.5 Flash (Medium)",
-  FLASH_LOW: "Gemini 3.5 Flash (Low)",
-  SONNET: "Claude Sonnet 4.6 (Thinking)",
-  OPUS: "Claude Opus 4.6 (Thinking)",
-  GPT_OSS: "GPT-OSS 120B (Medium)"
+  HYDROGEN_HIGH: "gemini-4-hydrogen-high", // agy 1.5.9 accepts the id (verified); display label untested
+  HYDROGEN_XHIGH: "gemini-4-hydrogen-xhigh",
+  ARGON_HIGH: "gemini-4-argon-high"
 });
 
-export const DEFAULT_MODEL = MODELS.PRO_HIGH;
+export const DEFAULT_MODEL = MODELS.HYDROGEN_HIGH;
 
 export const MODEL_ALIASES = new Map([
-  ["pro", MODELS.PRO_HIGH],
-  ["pro-high", MODELS.PRO_HIGH],
-  ["pro-low", MODELS.PRO_LOW],
-  ["flash", MODELS.FLASH_HIGH],
-  ["flash-high", MODELS.FLASH_HIGH],
-  ["flash-medium", MODELS.FLASH_MEDIUM],
-  ["flash-low", MODELS.FLASH_LOW],
-  ["sonnet", MODELS.SONNET],
-  ["opus", MODELS.OPUS],
-  ["gpt-oss", MODELS.GPT_OSS]
+  ["hydrogen", MODELS.HYDROGEN_HIGH],
+  ["hydrogen-xhigh", MODELS.HYDROGEN_XHIGH],
+  ["argon", MODELS.ARGON_HIGH]
 ]);
 
 export function resolveModel(input) {

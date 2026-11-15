@@ -29,8 +29,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/antigravity-companion.mjs" task <arguments>
 3. Add `--write` by default so Antigravity can make edits. Omit it only when the user explicitly asks for read-only behavior.
 4. If the user says `--resume` or follow-up phrases ("continue", "keep going", "pick up where you left off"), use `--resume-last`.
 5. If the user says `--fresh`, start a new conversation without resuming.
-6. Strip routing controls (`--effort`, `--model`) from the task text and pass them as flags instead.
-7. Model aliases: `pro` maps to `Gemini 3.1 Pro (High)` (default), `flash` to `Gemini 3.5 Flash (High)`, `sonnet`/`opus` to the Claude 4.6 thinking models, `gpt-oss` to `GPT-OSS 120B (Medium)`.
+6. Strip routing controls (`--effort`, `--model`) from the task text. Pass `--model` as a flag. Drop `--effort`: never pass it.
+7. Model aliases: `hydrogen` maps to `gemini-4-hydrogen-high` (default), `hydrogen-xhigh` to `gemini-4-hydrogen-xhigh`, `argon` to `gemini-4-argon-high`. No other models are available.
 
 ### Output rules
 

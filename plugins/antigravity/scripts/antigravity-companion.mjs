@@ -33,6 +33,7 @@ import {
 } from "./lib/job-control.mjs";
 import { binaryAvailable, isProcessAlive, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
+import { REVIEW_CARGO_TARGET_DIR, REVIEW_TEST_TIMEOUT_S } from "./lib/agy-cli.mjs";
 import {
   renderSetupReport,
   renderReviewResult,
@@ -136,7 +137,9 @@ function buildReviewPrompt(cwd, target, kind, focusText) {
       REVIEW_CONTEXT: context,
       SCHEMA_BLOCK: schemaBlock,
       TARGET_LABEL: targetLabel,
-      USER_FOCUS: focusText ? `\nUser focus: ${focusText}` : ""
+      USER_FOCUS: focusText ? `\nUser focus: ${focusText}` : "",
+      CARGO_TARGET_DIR: REVIEW_CARGO_TARGET_DIR,
+      TEST_TIMEOUT_S: String(REVIEW_TEST_TIMEOUT_S)
     }),
     targetLabel
   };
@@ -163,7 +166,8 @@ async function executeReviewForeground(cwd, target, kind, options = {}) {
     prompt,
     model: options.model,
     timeoutMs: options.timeoutMs,
-    env: options.env
+    env: options.env,
+    mirror: target.mode !== "branch"
   });
 
   if (!result.ok) {
@@ -172,6 +176,7 @@ async function executeReviewForeground(cwd, target, kind, options = {}) {
       { reviewLabel, targetLabel, reasoningSummary: null }
     );
     process.stdout.write(output);
+    process.exitCode = 1;
     return;
   }
 
@@ -180,6 +185,10 @@ async function executeReviewForeground(cwd, target, kind, options = {}) {
     { reviewLabel, targetLabel, reasoningSummary: result.reasoningSummary }
   );
   process.stdout.write(output);
+  // An empty or unparsable answer is not a review; callers must not read it as "no findings".
+  if (!result.parsed) {
+    process.exitCode = 1;
+  }
 }
 
 function executeReviewBackground(cwd, target, kind, options = {}) {
@@ -257,7 +266,8 @@ async function handleReviewWorker(cwd, argv) {
     model: options.model,
     workspaceRoot,
     logFile: jobRecord?.logFile ?? null,
-    jobId
+    jobId,
+    mirror: target.mode !== "branch"
   });
 
   const rendered = renderReviewResult(

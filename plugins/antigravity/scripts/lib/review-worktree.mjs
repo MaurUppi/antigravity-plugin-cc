@@ -67,7 +67,8 @@ export function mirrorWorkingState(workspaceRoot, worktreePath) {
  * @param {string|null} id - job id for background reviews; random for foreground
  * @returns {{ path: string, warnings: string[], cleanup: () => void }}
  */
-export function createReviewWorktree(workspaceRoot, id = null) {
+// mirror=false (branch reviews): the worktree is exactly HEAD, so the model reads the reviewed commit.
+export function createReviewWorktree(workspaceRoot, id = null, { mirror = true } = {}) {
   const worktreeId = id ?? crypto.randomBytes(4).toString("hex");
   const worktreePath = path.join(os.tmpdir(), `${WORKTREE_PREFIX}${worktreeId}`);
 
@@ -76,7 +77,7 @@ export function createReviewWorktree(workspaceRoot, id = null) {
     throw new Error(`git worktree add failed: ${(add.stderr || add.stdout).trim().slice(0, 300)}`);
   }
 
-  const warnings = mirrorWorkingState(workspaceRoot, worktreePath);
+  const warnings = mirror ? mirrorWorkingState(workspaceRoot, worktreePath) : [];
 
   function cleanup() {
     const remove = git(["worktree", "remove", "--force", worktreePath], workspaceRoot);

@@ -20,7 +20,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/antigravity-companion.mjs" task "<raw argume
 - Do NOT call `setup`, `review`, `adversarial-review`, `status`, `result`, or `cancel` from within rescue.
 - Strip `--background` and `--wait` from the task text and pass them as flags.
 - Leave `--model` unset unless the user explicitly requests a specific model.
-- Model aliases: `pro` → `Gemini 3.1 Pro (High)` (default), `pro-low` → `Gemini 3.1 Pro (Low)`, `flash` → `Gemini 3.5 Flash (High)`, `flash-medium` / `flash-low` → the lower Flash tiers, `sonnet` / `opus` → Claude 4.6 (Thinking), `gpt-oss` → `GPT-OSS 120B (Medium)`.
+- Never pass `--effort`.
+- Model aliases: `hydrogen` → `gemini-4-hydrogen-high` (default), `hydrogen-xhigh` → `gemini-4-hydrogen-xhigh`, `argon` → `gemini-4-argon-high`. No other models are available.
 - Default to write-capable runs by adding `--write` unless the user asks for read-only.
 - `--resume` triggers `task --resume-last`.
 - `--fresh` starts a clean `task` run.

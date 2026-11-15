@@ -84,7 +84,7 @@ describe("runAgyPrint", () => {
     }
   });
 
-  it("delivers the prompt via stdin and passes flags through", async () => {
+  it("delivers the prompt as the --print value and passes flags through", async () => {
     const binDir = createTempDir("agy-cli-test-");
     try {
       const agyPath = installFakeAgy(binDir, "echo-args");

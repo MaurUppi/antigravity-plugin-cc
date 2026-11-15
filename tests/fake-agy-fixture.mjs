@@ -36,7 +36,7 @@ const REVIEW_JSON = JSON.stringify({
 
 /**
  * Generates a fake `agy` executable that mimics print mode:
- * reads the prompt from stdin, writes realistic glog lines to --log-file,
+ * reads the prompt from the --print value, writes realistic glog lines to --log-file,
  * and emits behavior-dependent stdout/exit codes.
  *
  * Behaviors: task-ok | review-ok | echo-args | model-fallback | fail |
@@ -89,12 +89,8 @@ function writeLog() {
   fs.writeFileSync(logFile, lines.join('\\n') + '\\n', 'utf8');
 }
 
-let prompt = '';
-try {
-  prompt = fs.readFileSync(0, 'utf8');
-} catch {
-  prompt = '';
-}
+// agy 1.5.9 takes the prompt as the value of --print and no longer reads stdin.
+const prompt = argValue('--print') || '';
 
 writeLog();
 

@@ -1,12 +1,12 @@
 ---
 description: Run an Antigravity code review on your current work
-argument-hint: '[--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--wait] [--background]'
+argument-hint: '[--base <ref>] [--scope auto|working-tree|branch] [--model <model>] [--wait] [--background] [focus text...]'
 allowed-tools: Bash(node:*), AskUserQuestion
 ---
 
 This command runs a code review through the Antigravity CLI (agy).
 
-Parse the user's arguments. Supported flags: `--base <ref>`, `--scope <auto|working-tree|branch>`, `--model <model>`, `--wait`, `--background`.
+Parse the user's arguments. Supported flags: `--base <ref>`, `--scope <auto|working-tree|branch>`, `--model <model>`, `--wait`, `--background`. Everything after the flags is focus text (for example an audit axis brief); it is added to the review prompt.
 
 ## Execution modes
 
@@ -44,5 +44,6 @@ Use `AskUserQuestion` to let the user pick foreground or background.
 ## Constraints
 
 - This is review-only. The review runs in a disposable git worktree, so it cannot modify your working tree. Do not fix issues, apply patches, or suggest that you are about to make changes.
-- This does not support staged-only review, unstaged-only review, or extra focus text. Use `/antigravity:adversarial-review` when you want custom instructions.
+- This does not support staged-only review or unstaged-only review. Use `/antigravity:adversarial-review` when you want the design-challenge prompt instead of a defect review.
+- Working-tree mode embeds up to 20 untracked files (24 KB each). In a repository with untracked scratch files, commit first and pass `--base <SHA>`.
 - Present the Antigravity output exactly as returned.

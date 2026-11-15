@@ -6,7 +6,8 @@ import {
   killActiveAgyChild,
   parseAgyLog,
   readAgyLog,
-  DEFAULT_PRINT_TIMEOUT_MS
+  DEFAULT_PRINT_TIMEOUT_MS,
+  REVIEW_CARGO_TARGET_DIR
 } from "./agy-cli.mjs";
 import { createReviewWorktree, sweepOrphanedWorktrees } from "./review-worktree.mjs";
 import { DEFAULT_MODEL, resolveModel, suggestAlternatives } from "./models.mjs";
@@ -252,6 +253,7 @@ export async function runAntigravityTask(cwd, options = {}) {
     workspaceRoot,
     timeoutMs,
     skipWriteDetection = false,
+    sandbox = false,
     binary
   } = options;
 
@@ -291,6 +293,7 @@ export async function runAntigravityTask(cwd, options = {}) {
       agyLogFile,
       timeoutMs: timeoutMs ?? DEFAULT_PRINT_TIMEOUT_MS,
       skipPermissions: write,
+      sandbox,
       ...(binary ? { binary } : {})
     });
   } finally {
@@ -399,8 +402,53 @@ export async function runAntigravityTask(cwd, options = {}) {
  *
  * @returns {Promise<{ok: boolean, parsed: object|null, parseError: string|null, rawOutput: string, sessionId: string|null, reasoningSummary: string|null}>}
  */
+// The prompt travels in argv (ARG_MAX is 1 MiB on macOS, shared with env); a PR-sized diff
+// exceeds it. Larger prompts go to a file in agy's cwd, where reads need no confirmation.
+const INLINE_PROMPT_MAX_BYTES = 256 * 1024;
+export const SPILLED_PROMPT_FILE = ".antigravity-review-prompt.md";
+
+export function spillLargePrompt(execCwd, prompt) {
+  if (Buffer.byteLength(prompt, "utf8") <= INLINE_PROMPT_MAX_BYTES) {
+    return prompt;
+  }
+  fs.writeFileSync(path.join(execCwd, SPILLED_PROMPT_FILE), prompt);
+  return [
+    `Your complete review instructions, repository context and diff are in ./${SPILLED_PROMPT_FILE} (${prompt.length} characters).`,
+    "Read the whole file with relative paths, in several reads if the tool truncates it, before you start.",
+    "Then follow those instructions exactly; the output format they define is the only thing you may print."
+  ].join("\n");
+}
+
+// A run lasts at most about 16 min (15 min print limit plus grace), so 24 h never hits a live run
+// and leaves a day to inspect the build dir that a failed run kept.
+export const STALE_RUN_TARGET_MS = 24 * 60 * 60 * 1000;
+
+/** Remove run-* build dirs under root whose mtime is older than maxAgeMs; return the removed paths. */
+export function sweepStaleRunTargetDirs(root = REVIEW_CARGO_TARGET_DIR, maxAgeMs = STALE_RUN_TARGET_MS, now = Date.now()) {
+  let entries;
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const removed = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith("run-")) continue;
+    const dir = path.join(root, entry.name);
+    try {
+      if (now - fs.statSync(dir).mtimeMs > maxAgeMs) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        removed.push(dir);
+      }
+    } catch (err) {
+      process.stderr.write(`could not remove stale cargo build dir ${dir}: ${err.message}\n`);
+    }
+  }
+  return removed;
+}
+
 export async function runAntigravityReview(cwd, options = {}) {
-  const { prompt, model, timeoutMs, logFile, onProgress, env, workspaceRoot, jobId, binary } = options;
+  const { prompt, model, timeoutMs, logFile, onProgress, env, workspaceRoot, jobId, binary, mirror = true } = options;
   const effectiveWorkspaceRoot = workspaceRoot ?? resolveWorkspaceRoot(cwd);
 
   try {
@@ -408,11 +456,14 @@ export async function runAntigravityReview(cwd, options = {}) {
   } catch {
     // best-effort housekeeping
   }
+  for (const dir of sweepStaleRunTargetDirs()) {
+    process.stderr.write(`removed stale cargo build dir: ${dir}\n`);
+  }
 
   let isolation = null;
   let isolationNote = null;
   try {
-    isolation = createReviewWorktree(effectiveWorkspaceRoot, jobId ?? null);
+    isolation = createReviewWorktree(effectiveWorkspaceRoot, jobId ?? null, { mirror });
     for (const warning of isolation.warnings) {
       appendLogLine(logFile, `worktree: ${warning}`);
     }
@@ -423,14 +474,21 @@ export async function runAntigravityReview(cwd, options = {}) {
   }
 
   const execCwd = isolation ? isolation.path : createTempDir("agy-review-");
+  // One cargo build dir per run inside the --add-dir root, so parallel reviews never share it; removed after a normal finish.
+  fs.mkdirSync(REVIEW_CARGO_TARGET_DIR, { recursive: true });
+  const runTargetDir = fs.mkdtempSync(path.join(REVIEW_CARGO_TARGET_DIR, "run-"));
 
   let taskResult;
   try {
+    // agy only auto-grants reads inside its cwd; a prompt naming the real repo root makes
+    // the model read outside it, print mode soft-denies ReadFile and the run ends empty.
+    const localPrompt = isolation ? prompt.split(effectiveWorkspaceRoot).join(isolation.path) : prompt;
     taskResult = await runAntigravityTask(execCwd, {
-      prompt,
+      prompt: spillLargePrompt(execCwd, localPrompt.split(REVIEW_CARGO_TARGET_DIR).join(runTargetDir)),
       model,
       write: false,
       skipWriteDetection: true,
+      sandbox: true,
       logFile,
       onProgress,
       env,
@@ -448,6 +506,15 @@ export async function runAntigravityReview(cwd, options = {}) {
       } catch {
         // best effort
       }
+    }
+    if (taskResult?.ok) {
+      try {
+        fs.rmSync(runTargetDir, { recursive: true, force: true });
+      } catch (err) {
+        process.stderr.write(`could not remove cargo build dir ${runTargetDir}: ${err.message}\n`);
+      }
+    } else {
+      process.stderr.write(`kept cargo build dir of the failed run: ${runTargetDir}\n`);
     }
   }
 

@@ -5,6 +5,23 @@ export const DEFAULT_PRINT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 const DEFAULT_WATCHDOG_GRACE_MS = 30_000;
 const SIGKILL_DELAY_MS = 5_000;
 const MAX_LOG_READ_BYTES = 5 * 1024 * 1024;
+// Shared cargo build cache for sandboxed reviews; --add-dir makes it the only writable path outside cwd and /tmp.
+export const REVIEW_CARGO_TARGET_DIR = "/Volumes/P5800X/.tmp/agy-review-target";
+// The sandbox allows bind but blocks connect, so a test waiting on a local peer never ends; each sandboxed test binary gets SIGALRM after this.
+export const REVIEW_TEST_TIMEOUT_S = 120;
+
+/**
+ * Return a copy of baseEnv in which cargo runs every test/example binary through perl with alarm (alarm survives exec).
+ * Cargo splits the runner env var on whitespace without quoting, so the perl code holds no spaces.
+ * A runner the caller already set is kept.
+ */
+export function sandboxEnv(baseEnv = process.env, { arch = process.arch, timeoutS = REVIEW_TEST_TIMEOUT_S } = {}) {
+  const key = `CARGO_TARGET_${arch === "x64" ? "X86_64" : "AARCH64"}_APPLE_DARWIN_RUNNER`;
+  if (baseEnv[key]) {
+    return { ...baseEnv };
+  }
+  return { ...baseEnv, [key]: `/usr/bin/perl -e alarm(shift);exec{$ARGV[0]}@ARGV;die"exec:$!" ${timeoutS}` };
+}
 
 // Matches both fresh runs ("Print mode: conversation=<uuid>, sending message")
 // and resumed runs ("Print mode: resuming conversation <uuid>").
@@ -34,17 +51,26 @@ export function killActiveAgyChild(signal = "SIGTERM") {
   return false;
 }
 
+// agy logs the display label even when --model got the id: "Gemini 4 Hydrogen (High)" ~ "gemini-4-hydrogen-high".
+export function modelSlug(name) {
+  return String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
 export function buildAgyArgs(options = {}) {
   const {
+    prompt,
     modelLabel,
     conversationId,
     agyLogFile,
     timeoutMs = DEFAULT_PRINT_TIMEOUT_MS,
-    skipPermissions = false
+    skipPermissions = false,
+    sandbox = false
   } = options;
 
   const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
-  const args = ["--print", "", "--print-timeout", `${timeoutSeconds}s`]; // empty --print value = agy reads the prompt from stdin
+  // agy 1.5.9 rejects an empty --print and no longer reads stdin.
+  // shortcut: prompt rides in argv, so prompts over ARG_MAX (~1 MB on macOS) fail to spawn (E2BIG); switch to --input-format stream-json if that happens.
+  const args = ["--print", String(prompt ?? ""), "--print-timeout", `${timeoutSeconds}s`];
   if (modelLabel) {
     args.push("--model", modelLabel);
   }
@@ -56,6 +82,13 @@ export function buildAgyArgs(options = {}) {
   }
   if (skipPermissions) {
     args.push("--dangerously-skip-permissions");
+  } else if (sandbox) {
+    // Verified on agy 1.5.9: commands run without prompts; no network; writes outside cwd, /tmp and --add-dir fail.
+    args.push(
+      "--sandbox",
+      "--settings", JSON.stringify({ toolPermission: "proceed-in-sandbox", enableTerminalSandbox: true }),
+      "--add-dir", REVIEW_CARGO_TARGET_DIR
+    );
   }
   return args;
 }
@@ -131,14 +164,19 @@ export function runAgyPrint(options = {}) {
     agyLogFile,
     timeoutMs = DEFAULT_PRINT_TIMEOUT_MS,
     skipPermissions = false,
+    sandbox = false,
     env,
     binary = "agy",
     watchdogGraceMs = DEFAULT_WATCHDOG_GRACE_MS
   } = options;
 
+  if (sandbox) {
+    fs.mkdirSync(REVIEW_CARGO_TARGET_DIR, { recursive: true });
+  }
   return new Promise((resolve) => {
-    const args = buildAgyArgs({ modelLabel, conversationId, agyLogFile, timeoutMs, skipPermissions });
-    const child = spawn(binary, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+    const args = buildAgyArgs({ prompt, modelLabel, conversationId, agyLogFile, timeoutMs, skipPermissions, sandbox });
+    const childEnv = sandbox ? sandboxEnv(env ?? process.env) : env;
+    const child = spawn(binary, args, { cwd, env: childEnv, stdio: ["pipe", "pipe", "pipe"] });
     _activeChild = child;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -191,7 +229,7 @@ export function runAgyPrint(options = {}) {
         conversationId: parsed.conversationId ?? conversationId ?? null,
         resolvedModelLabel: parsed.resolvedModelLabel,
         modelFellBack: Boolean(
-          modelLabel && parsed.resolvedModelLabel && parsed.resolvedModelLabel !== modelLabel
+          modelLabel && parsed.resolvedModelLabel && modelSlug(parsed.resolvedModelLabel) !== modelSlug(modelLabel)
         ),
         timedOut,
         spawnErrorMessage
@@ -214,9 +252,8 @@ export function runAgyPrint(options = {}) {
     });
 
     child.stdin.on("error", () => {
-      // EPIPE when agy exits before consuming stdin — harmless.
+      // EPIPE when agy exits early — harmless.
     });
-    child.stdin.write(String(prompt ?? ""));
     child.stdin.end();
   });
 }

@@ -88,14 +88,14 @@ describe("runAntigravityTask failure branches", () => {
       const agyPath = installFakeAgy(binDir, "model-fallback");
       const result = await runAntigravityTask(binDir, {
         prompt: "x",
-        model: "pro",
+        model: "argon",
         binary: agyPath,
         timeoutMs: 10_000
       });
       assert.equal(result.ok, false);
       assert.equal(result.stopReason, "error");
-      assert.ok(result.failureMessage.includes('Model "Gemini 3.1 Pro (High)" is unavailable'));
-      assert.ok(result.failureMessage.includes('(requested via "pro")'));
+      assert.ok(result.failureMessage.includes('Model "gemini-4-argon-high" is unavailable'));
+      assert.ok(result.failureMessage.includes('(requested via "argon")'));
       assert.ok(result.failureMessage.includes('fell back to "Gemini 3.5 Flash (Medium)"'));
     } finally {
       cleanTempDir(binDir);
