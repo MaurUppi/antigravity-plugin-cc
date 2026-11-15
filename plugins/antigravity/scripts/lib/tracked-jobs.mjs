@@ -239,3 +239,20 @@ export async function runTrackedJob(job, runner, options = {}) {
     return { ok: false, job: failedJob, error };
   }
 }
+
+/**
+ * Progress reporter for a background worker. Every event goes to the job log, which
+ * `status` already previews; only phase changes rewrite the shared state.json, so a
+ * heartbeat every 15 s does not keep the state file under constant concurrent writes.
+ */
+export function createBackgroundJobReporter(workspaceRoot, jobId, logFile) {
+  const updateJob = createJobProgressUpdater(workspaceRoot, jobId);
+  let lastPhase = null;
+  const onPhaseChange = (event) => {
+    if (event.phase && event.phase !== lastPhase) {
+      lastPhase = event.phase;
+      updateJob(event);
+    }
+  };
+  return createProgressReporter({ logFile, onProgress: onPhaseChange, stderr: false });
+}

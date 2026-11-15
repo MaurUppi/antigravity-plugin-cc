@@ -117,7 +117,7 @@ export function parseAgyLog(logText) {
 // shortcut: these are agy-internal safety-monitor lines (measured on agy 1.5.9, undocumented);
 // if agy renames them the counts read 0 and the review itself is unaffected — re-measure after agy upgrades.
 const TOOL_CALL_RE = /Monitor agy_tool_safety FINISHED:/g;
-const ACTIVITY_RE = /Monitor sir_flash_lite FINISHED: triggered=\w+, reason="([^"]*)"/g;
+const ACTIVITY_RE = /Monitor sir_flash_lite FINISHED: triggered=\w+, reason="((?:[^"\\\n]|\\.)*)"/g;
 const MAX_ACTIVITY_CHARS = 160;
 
 /** Count tool calls and take the last activity description from agy's glog, for progress display only. */
@@ -126,7 +126,11 @@ export function parseAgyActivity(logText) {
   const toolCalls = text.match(TOOL_CALL_RE)?.length ?? 0;
   let lastActivity = null;
   for (const match of text.matchAll(ACTIVITY_RE)) {
-    lastActivity = match[1].slice(0, MAX_ACTIVITY_CHARS);
+    lastActivity = match[1];
+  }
+  if (lastActivity !== null) {
+    // Array.from splits by code point, so the cut never leaves half a surrogate pair.
+    lastActivity = Array.from(lastActivity.replace(/\\(.)/g, "$1")).slice(0, MAX_ACTIVITY_CHARS).join("");
   }
   return { toolCalls, lastActivity };
 }

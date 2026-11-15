@@ -224,6 +224,20 @@ function watchConversationId(agyLogFile, onFound) {
 
 const PROGRESS_INTERVAL_MS = 15_000;
 
+/** A failed progress write must not kill the run or lose its result; the error reaches the job log via stderr. */
+function guardProgress(onProgress) {
+  if (!onProgress) {
+    return undefined;
+  }
+  return (event) => {
+    try {
+      onProgress(event);
+    } catch (err) {
+      process.stderr.write(`progress update failed: ${err.message}\n`);
+    }
+  };
+}
+
 /**
  * While agy runs, report elapsed time, tool-call count and agy's last activity
  * description every intervalMs, so `status` shows a background job is alive.
@@ -235,15 +249,12 @@ function startHeartbeat(agyLogFile, onProgress, intervalMs) {
   }
   const startedAt = Date.now();
   const timer = setInterval(() => {
-    try {
-      const { toolCalls, lastActivity } = parseAgyActivity(readAgyLog(agyLogFile));
-      const seconds = Math.round((Date.now() - startedAt) / 1000);
-      const activity = lastActivity ? `; last activity: ${lastActivity}` : "";
-      onProgress({ message: `agy running ${seconds}s: ${toolCalls} tool calls${activity}`, phase: "running" });
-    } catch (err) {
-      // A failed progress write must not kill the run; the error still reaches the job log via stderr.
-      process.stderr.write(`progress update failed: ${err.message}\n`);
-    }
+    // shortcut: readAgyLog reads only the first 5 MB, so counts freeze past that (measured ~700 B per tool call,
+    // largest real log 128 KB); switch to incremental reads from the last offset if logs get that large.
+    const { toolCalls, lastActivity } = parseAgyActivity(readAgyLog(agyLogFile));
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    const activity = lastActivity ? `; last activity: ${lastActivity}` : "";
+    onProgress({ message: `agy running ${seconds}s: ${toolCalls} tool calls${activity}`, phase: "running" });
   }, intervalMs);
   timer.unref?.();
   return () => clearInterval(timer);
@@ -275,7 +286,7 @@ export async function runAntigravityTask(cwd, options = {}) {
     write = true,
     resume,
     logFile,
-    onProgress,
+    onProgress: rawOnProgress,
     env,
     jobId,
     workspaceRoot,
@@ -286,6 +297,7 @@ export async function runAntigravityTask(cwd, options = {}) {
     progressIntervalMs = PROGRESS_INTERVAL_MS
   } = options;
 
+  const onProgress = guardProgress(rawOnProgress);
   const resolvedModel = resolveModel(model) ?? DEFAULT_MODEL;
   const effectiveWorkspaceRoot = workspaceRoot ?? resolveWorkspaceRoot(cwd);
   const agyLogFile = logFile
@@ -479,7 +491,8 @@ export function sweepStaleRunTargetDirs(root = REVIEW_CARGO_TARGET_DIR, maxAgeMs
 }
 
 export async function runAntigravityReview(cwd, options = {}) {
-  const { prompt, model, timeoutMs, logFile, onProgress, env, workspaceRoot, jobId, binary, mirror = true, progressIntervalMs } = options;
+  const { prompt, model, timeoutMs, logFile, env, workspaceRoot, jobId, binary, mirror = true, progressIntervalMs } = options;
+  const onProgress = guardProgress(options.onProgress);
   const effectiveWorkspaceRoot = workspaceRoot ?? resolveWorkspaceRoot(cwd);
   onProgress?.({ message: "preparing review worktree", phase: "starting" });
 

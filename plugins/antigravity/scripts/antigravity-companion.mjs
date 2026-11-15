@@ -49,8 +49,7 @@ import {
   nowIso,
   createJobRecord,
   createJobLogFile,
-  createJobProgressUpdater,
-  createProgressReporter
+  createBackgroundJobReporter
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
@@ -152,13 +151,9 @@ async function executeReviewForeground(cwd, target, kind, options = {}) {
   const { prompt, targetLabel } = buildReviewPrompt(cwd, target, kind, options.focusText);
   const reviewLabel = kind === "adversarial-review" ? "Adversarial Review" : "Review";
 
-  // Guard: if the review context contains no actual diff/changes, return
-  // a clean "no changes" result instead of sending a near-empty prompt to
-  // the model (which can reject it as an invalid request).
-  const hasChanges = /^## (Staged changes|Unstaged changes|Untracked files|Diff|Commits)/m.test(prompt);
-  if (!hasChanges) {
+  if (!hasReviewChanges(prompt)) {
     const output = renderReviewResult(
-      { parsed: { verdict: "approve", summary: "No code changes or material issues were found in the provided diff.", findings: [] }, parseError: null, rawOutput: null },
+      { parsed: NO_CHANGES_REVIEW, parseError: null, rawOutput: null },
       { reviewLabel, targetLabel, reasoningSummary: null }
     );
     process.stdout.write(output);
@@ -202,9 +197,34 @@ function reviewFailureReason(result) {
   return validateReviewResultShape(result.parsed);
 }
 
-// Writes progress to the job log (the worker's stderr already goes there) and phase/summary to job state.
-function jobProgressReporter(workspaceRoot, jobId, logFile) {
-  return createProgressReporter({ logFile, onProgress: createJobProgressUpdater(workspaceRoot, jobId), stderr: false });
+const NO_CHANGES_REVIEW = {
+  verdict: "approve",
+  summary: "No code changes or material issues were found in the provided diff.",
+  findings: [],
+  next_steps: []
+};
+
+// With no diff in the context, answer "no changes" instead of sending a near-empty
+// prompt to the model (which can reject it as an invalid request).
+function hasReviewChanges(prompt) {
+  return /^## (Staged changes|Unstaged changes|Untracked files|Diff|Commits)/m.test(prompt);
+}
+
+// A worker that throws must not leave its job "running" forever.
+async function failJobOnError(workspaceRoot, jobId, work) {
+  try {
+    await work();
+  } catch (err) {
+    upsertJob(workspaceRoot, {
+      id: jobId,
+      status: "failed",
+      phase: "failed",
+      completedAt: nowIso(),
+      summary: err.message,
+      errorMessage: err.message
+    });
+    throw err;
+  }
 }
 
 function executeReviewBackground(cwd, target, kind, options = {}) {
@@ -267,27 +287,37 @@ async function handleReviewWorker(cwd, argv) {
   });
 
   const jobId = options["job-id"];
-  const kind = options.kind ?? "review";
   const workerCwd = options.cwd ?? cwd;
   const workspaceRoot = resolveWorkspaceRoot(workerCwd);
+  await failJobOnError(workspaceRoot, jobId, () => runReviewJob(workerCwd, workspaceRoot, jobId, options));
+}
+
+async function runReviewJob(workerCwd, workspaceRoot, jobId, options) {
+  const kind = options.kind ?? "review";
   const target = options.base ? { mode: "branch", base: options.base } : resolveReviewTarget(workerCwd);
-
-  const jobRecord = listJobs(workspaceRoot).find((j) => j.id === jobId);
-
   const { prompt, targetLabel } = buildReviewPrompt(workerCwd, target, kind, options.focus);
   const reviewLabel = kind === "adversarial-review" ? "Adversarial Review" : "Review";
 
-  const logFile = jobRecord?.logFile ?? null;
+  if (!hasReviewChanges(prompt)) {
+    const noChanges = { ok: true, parsed: NO_CHANGES_REVIEW, parseError: null, rawOutput: null, sessionId: null };
+    finishReviewJob(workspaceRoot, jobId, noChanges, { reviewLabel, targetLabel });
+    return;
+  }
+
+  const logFile = listJobs(workspaceRoot).find((j) => j.id === jobId)?.logFile ?? null;
   const result = await runAntigravityReview(workerCwd, {
     prompt,
     model: options.model,
     workspaceRoot,
     logFile,
-    onProgress: jobProgressReporter(workspaceRoot, jobId, logFile),
+    onProgress: createBackgroundJobReporter(workspaceRoot, jobId, logFile),
     jobId,
     mirror: target.mode !== "branch"
   });
+  finishReviewJob(workspaceRoot, jobId, result, { reviewLabel, targetLabel });
+}
 
+function finishReviewJob(workspaceRoot, jobId, result, { reviewLabel, targetLabel }) {
   const rendered = renderReviewResult(
     { parsed: result.parsed, parseError: result.parseError, rawOutput: result.rawOutput },
     { reviewLabel, targetLabel, reasoningSummary: result.reasoningSummary }
@@ -475,20 +505,20 @@ async function handleTaskWorker(cwd, argv) {
   const jobId = options["job-id"];
   const workerCwd = options.cwd ?? cwd;
   const workspaceRoot = resolveWorkspaceRoot(workerCwd);
-  const write = !options["read-only"];
+  await failJobOnError(workspaceRoot, jobId, () => runTaskJob(workerCwd, workspaceRoot, jobId, options));
+}
 
-  const jobRecord = listJobs(workspaceRoot).find((j) => j.id === jobId);
-  const logFile = jobRecord?.logFile ?? null;
-
+async function runTaskJob(workerCwd, workspaceRoot, jobId, options) {
+  const logFile = listJobs(workspaceRoot).find((j) => j.id === jobId)?.logFile ?? null;
   const result = await runAntigravityTask(workerCwd, {
     prompt: options.prompt,
     model: options.model,
-    write,
+    write: !options["read-only"],
     resume: options.resume,
     jobId,
     workspaceRoot,
     logFile,
-    onProgress: jobProgressReporter(workspaceRoot, jobId, logFile)
+    onProgress: createBackgroundJobReporter(workspaceRoot, jobId, logFile)
   });
 
   const rendered = renderTaskResult(result);

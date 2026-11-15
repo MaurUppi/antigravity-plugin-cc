@@ -11,6 +11,9 @@ import { installFakeAgy, createFakeAgyEnv } from "./fake-agy-fixture.mjs";
 import { resolveReviewTarget } from "../plugins/antigravity/scripts/lib/git.mjs";
 import { parseAgyActivity } from "../plugins/antigravity/scripts/lib/agy-cli.mjs";
 import { runAntigravityReview } from "../plugins/antigravity/scripts/lib/antigravity.mjs";
+import { validateReviewResultShape } from "../plugins/antigravity/scripts/lib/render.mjs";
+import { createBackgroundJobReporter } from "../plugins/antigravity/scripts/lib/tracked-jobs.mjs";
+import { upsertJob, listJobs, resolveStateDir } from "../plugins/antigravity/scripts/lib/state.mjs";
 
 // Not a commit anywhere; without the ^{commit} peel, `rev-parse --verify` accepts any 40-hex value.
 const MISSING_FULL_SHA = "dead".repeat(10);
@@ -50,6 +53,28 @@ describe("resolveReviewTarget --base check", () => {
 
   it("accepts a real commit", () => {
     assert.deepEqual(resolveReviewTarget(repo.dir, { base: repo.base }), { mode: "branch", base: repo.base });
+  });
+
+  it("rejects an empty --base instead of falling back to the working tree", () => {
+    assert.throws(() => resolveReviewTarget(repo.dir, { base: "" }), /--base .* is not a commit/);
+  });
+
+  it("rejects a base that shares no history with HEAD", () => {
+    const orphan = git(repo.dir, "commit-tree", git(repo.dir, "rev-parse", "HEAD^{tree}"), "-m", "orphan");
+    assert.throws(() => resolveReviewTarget(repo.dir, { base: orphan }), /no common ancestor with HEAD/);
+  });
+
+  it("rejects a default branch that does not exist instead of diffing against nothing", () => {
+    const dir = createTempDir("review-exit-nomain-");
+    try {
+      initGitRepo(dir);
+      git(dir, "branch", "-m", "feature");
+      for (const scope of ["branch", "auto"]) {
+        assert.throws(() => resolveReviewTarget(dir, { scope }), /default branch main is not a commit.*--base/);
+      }
+    } finally {
+      cleanTempDir(dir);
+    }
   });
 
   it("says so when the directory is not a git repository", () => {
@@ -112,8 +137,8 @@ describe("review commands with fake agy", () => {
     assert.match(r.stdout, /Verdict: needs-attention/);
   });
 
-  function runBackground(behavior) {
-    const started = run(["review", "--background", "--base", repo.base], behavior);
+  function runBackground(behavior, base = repo.base) {
+    const started = run(["review", "--background", "--base", base], behavior);
     assert.equal(started.status, 0, started.stderr);
     const jobId = started.stdout.match(/job (\S+)/)[1];
     for (let i = 0; i < 150; i += 1) {
@@ -140,6 +165,57 @@ describe("review commands with fake agy", () => {
       assert.match(log, new RegExp(step), log);
     }
   });
+
+  it("background: an empty diff completes as approve without running agy", () => {
+    // review-bad-shape would fail the job if agy ran.
+    const job = runBackground("review-bad-shape", "HEAD");
+    assert.equal(job.status, "completed", job.summary);
+    assert.match(run(["result", job.id]).stdout, /Verdict: approve/);
+  });
+
+  it("background: a worker that throws ends its job as failed", () => {
+    const nogit = createTempDir("review-exit-worker-nogit-");
+    try {
+      // The parent passes its CLAUDE_PROJECT_DIR as the worker's --cwd; status finds the job through the same dir.
+      const opts = { cwd: nogit, env: { ...env, CLAUDE_PROJECT_DIR: nogit } };
+      const r = runCompanion(["review-worker", "--job-id", "review-throw-1", "--cwd", nogit], opts);
+      assert.notEqual(r.status, 0);
+      const job = JSON.parse(runCompanion(["status", "review-throw-1", "--json"], opts).stdout);
+      assert.equal(job.status, "failed");
+      assert.equal(job.phase, "failed");
+      assert.match(job.summary, /Not inside a git repository/);
+    } finally {
+      cleanTempDir(nogit);
+    }
+  });
+});
+
+describe("review result shape", () => {
+  it("follows the output schema for verdict and findings", () => {
+    const ok = { verdict: "approve", summary: "s", findings: [], next_steps: [] };
+    assert.equal(validateReviewResultShape(ok), null);
+    assert.match(validateReviewResultShape({ ...ok, verdict: "error" }), /verdict/);
+    assert.match(validateReviewResultShape({ ...ok, findings: "none found" }), /findings/);
+  });
+});
+
+describe("background job reporter", () => {
+  it("logs every event but writes only phase changes to state.json, atomically", () => {
+    const ws = createTempDir("review-reporter-");
+    try {
+      const logFile = path.join(ws, "job.log");
+      upsertJob(ws, { id: "j1", status: "running" });
+      const report = createBackgroundJobReporter(ws, "j1", logFile);
+      report({ message: "agy running...", phase: "running" });
+      report({ message: "agy running 15s: 3 tool calls", phase: "running" });
+      assert.equal(listJobs(ws).find((j) => j.id === "j1").summary, "agy running...");
+      assert.match(fs.readFileSync(logFile, "utf8"), /3 tool calls/);
+      assert.deepEqual(fs.readdirSync(resolveStateDir(ws)).filter((f) => f.endsWith(".tmp")), []);
+    } finally {
+      cleanTempDir(ws);
+      fs.rmSync(resolveStateDir(ws), { recursive: true, force: true });
+    }
+  });
 });
 
 describe("agy progress", () => {
@@ -154,6 +230,32 @@ describe("agy progress", () => {
     assert.deepEqual(parseAgyActivity(""), { toolCalls: 0, lastActivity: null });
   });
 
+  it("parseAgyActivity keeps escaped quotes and never splits a character", () => {
+    const line = (reason) => `I0101 x] Monitor sir_flash_lite FINISHED: triggered=false, reason="${reason}", duration=1s`;
+    assert.equal(parseAgyActivity(line('The agent runs \\"git log\\".')).lastActivity, 'The agent runs "git log".');
+    assert.equal(parseAgyActivity(line("a".repeat(159) + "😀😀")).lastActivity, "a".repeat(159) + "😀");
+  });
+
+  it("a throwing progress callback does not stop the review", async () => {
+    const dir = createTempDir("review-progress-throw-");
+    const binDir = createTempDir("review-progress-throw-bin-");
+    try {
+      initGitRepo(dir);
+      const res = await runAntigravityReview(dir, {
+        prompt: "review this",
+        binary: installFakeAgy(binDir, "review-ok"),
+        workspaceRoot: dir,
+        logFile: path.join(binDir, "job.log"),
+        onProgress: () => { throw new Error("disk full"); }
+      });
+      assert.equal(res.ok, true, res.parseError);
+      assert.ok(res.parsed);
+    } finally {
+      cleanTempDir(dir);
+      cleanTempDir(binDir);
+    }
+  });
+
   it("a review reports its phases and a heartbeat with live tool counts", async () => {
     const dir = createTempDir("review-progress-");
     const binDir = createTempDir("review-progress-bin-");
@@ -164,6 +266,7 @@ describe("agy progress", () => {
         prompt: "review this",
         binary: installFakeAgy(binDir, "review-slow-tools"),
         workspaceRoot: dir,
+        logFile: path.join(binDir, "job.log"),
         onProgress: (event) => events.push(event),
         progressIntervalMs: 50
       });

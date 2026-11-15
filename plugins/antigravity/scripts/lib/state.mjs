@@ -59,7 +59,12 @@ export function saveState(workspaceRoot, state) {
 
   const activeJobIds = new Set(pruned.jobs.map((job) => job.id));
   const stateFile = resolveStateFile(workspaceRoot);
-  fs.writeFileSync(stateFile, `${JSON.stringify(pruned, null, 2)}\n`, "utf8");
+  // rename is atomic: a concurrent reader never sees a half-written file, which loadState
+  // would read as an empty state and the next save would write back, losing every other job.
+  // shortcut: no lock, so two writers can still lose one update; add a lockfile if jobs show stale status.
+  const tmpFile = `${stateFile}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpFile, `${JSON.stringify(pruned, null, 2)}\n`, "utf8");
+  fs.renameSync(tmpFile, stateFile);
 
   try {
     const entries = fs.readdirSync(stateDir);

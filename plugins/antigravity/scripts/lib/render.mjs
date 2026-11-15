@@ -28,8 +28,15 @@ export function validateReviewResultShape(data) {
   if (typeof data.verdict !== "string" || !data.verdict.trim()) {
     return "Missing string `verdict`.";
   }
+  if (!["approve", "needs-attention"].includes(data.verdict.trim())) {
+    return "`verdict` must be \"approve\" or \"needs-attention\".";
+  }
   if (typeof data.summary !== "string" || !data.summary.trim()) {
     return "Missing string `summary`.";
+  }
+  // Findings in any other form would be dropped and the review would read as "No material findings".
+  if (!Array.isArray(data.findings)) {
+    return "Missing array `findings`.";
   }
   return null;
 }

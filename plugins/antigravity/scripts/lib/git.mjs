@@ -58,14 +58,8 @@ export function resolveReviewTarget(cwd, options = {}) {
   const explicitScope = options.scope ?? "auto";
   ensureGitRepository(cwd);
 
-  if (explicitBase) {
-    // A base git cannot resolve yields an empty diff, which the caller reports as "approve".
-    // The ^{commit} peel matters: without it `rev-parse --verify` accepts any 40-hex string.
-    const check = git(["rev-parse", "--verify", "--quiet", `${explicitBase}^{commit}`], { cwd });
-    if (check.status !== 0) {
-      throw new Error(`--base ${explicitBase} is not a commit in this repository.`);
-    }
-    return { mode: "branch", base: explicitBase };
+  if (explicitBase !== null) {
+    return branchTarget(cwd, explicitBase, `--base ${explicitBase || '""'}`);
   }
 
   if (explicitScope === "working-tree") {
@@ -73,8 +67,7 @@ export function resolveReviewTarget(cwd, options = {}) {
   }
 
   if (explicitScope === "branch") {
-    const base = detectDefaultBranch(cwd);
-    return { mode: "branch", base };
+    return defaultBranchTarget(cwd, detectDefaultBranch(cwd));
   }
 
   const statusResult = git(["status", "--porcelain"], { cwd });
@@ -86,10 +79,26 @@ export function resolveReviewTarget(cwd, options = {}) {
   const currentBranch = getCurrentBranch(cwd);
   const defaultBranch = detectDefaultBranch(cwd);
   if (currentBranch && currentBranch !== defaultBranch) {
-    return { mode: "branch", base: defaultBranch };
+    return defaultBranchTarget(cwd, defaultBranch);
   }
 
   return { mode: "working-tree" };
+}
+
+// A base git cannot diff against yields an empty diff, which the caller reports as "approve".
+function branchTarget(cwd, base, label, hint = "") {
+  // The ^{commit} peel matters: without it `rev-parse --verify` accepts any 40-hex string.
+  if (git(["rev-parse", "--verify", "--quiet", `${base}^{commit}`], { cwd }).status !== 0) {
+    throw new Error(`${label} is not a commit in this repository.${hint}`);
+  }
+  if (git(["merge-base", base, "HEAD"], { cwd }).status !== 0) {
+    throw new Error(`${label} has no common ancestor with HEAD.${hint}`);
+  }
+  return { mode: "branch", base };
+}
+
+function defaultBranchTarget(cwd, base) {
+  return branchTarget(cwd, base, `default branch ${base}`, " Pass --base <ref> or --scope working-tree.");
 }
 
 const MAX_FILE_SIZE = 24 * 1024;
