@@ -213,12 +213,13 @@ function hasReviewChanges(prompt) {
 
 // cancel writes "cancelled" after a 3 s wait; a worker whose agy stops later must not overwrite it with "failed".
 function finalJobFields(failure, doneSummary) {
+  const completedAt = nowIso();
   if (isShutdownRequested()) {
-    return { status: "cancelled", phase: "cancelled", summary: "Cancelled", completedAt: nowIso() };
+    return { status: "cancelled", phase: "cancelled", summary: "Cancelled", errorMessage: null, completedAt };
   }
   return failure
-    ? { status: "failed", phase: "failed", summary: failure, completedAt: nowIso() }
-    : { status: "completed", phase: "done", summary: doneSummary, completedAt: nowIso() };
+    ? { status: "failed", phase: "failed", summary: failure, errorMessage: failure, completedAt }
+    : { status: "completed", phase: "done", summary: doneSummary, errorMessage: null, completedAt };
 }
 
 // A worker that throws must not leave its job "running" forever.
@@ -227,7 +228,7 @@ async function failJobOnError(workspaceRoot, jobId, work) {
     await work();
   } catch (err) {
     try {
-      upsertJob(workspaceRoot, { id: jobId, ...finalJobFields(err.message), errorMessage: err.message });
+      upsertJob(workspaceRoot, { id: jobId, ...finalJobFields(err.message) });
     } catch (writeErr) {
       process.stderr.write(`could not write the final status of job ${jobId}: ${writeErr.message}\n`);
     }
@@ -333,17 +334,14 @@ function finishReviewJob(workspaceRoot, jobId, result, { reviewLabel, targetLabe
   );
 
   const failure = reviewFailureReason(result);
-  upsertJob(workspaceRoot, {
-    id: jobId,
-    ...finalJobFields(failure, failure ? null : result.parsed.summary),
-    sessionId: result.sessionId
-  });
+  const fields = finalJobFields(failure, failure ? null : result.parsed.summary);
+  upsertJob(workspaceRoot, { id: jobId, ...fields, sessionId: result.sessionId });
 
   writeJobFile(workspaceRoot, jobId, {
     result: { parsed: result.parsed, parseError: result.parseError, rawOutput: result.rawOutput },
     rendered,
     sessionId: result.sessionId,
-    errorMessage: failure
+    errorMessage: fields.errorMessage
   });
 }
 
@@ -529,17 +527,14 @@ async function runTaskJob(workerCwd, workspaceRoot, jobId, options) {
 
   const rendered = renderTaskResult(result);
 
-  upsertJob(workspaceRoot, {
-    id: jobId,
-    ...finalJobFields(result.ok ? null : (result.failureMessage ?? "Task failed"), "Task completed"),
-    sessionId: result.sessionId
-  });
+  const fields = finalJobFields(result.ok ? null : (result.failureMessage ?? "Task failed"), "Task completed");
+  upsertJob(workspaceRoot, { id: jobId, ...fields, sessionId: result.sessionId });
 
   writeJobFile(workspaceRoot, jobId, {
     result: { rawOutput: result.rawOutput },
     rendered,
     sessionId: result.sessionId,
-    errorMessage: result.failureMessage
+    errorMessage: fields.errorMessage
   });
 }
 

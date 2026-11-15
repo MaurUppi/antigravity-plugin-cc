@@ -357,6 +357,15 @@ export function renderJobStatusReport(job) {
 }
 
 export function renderStoredJobResult(job, storedJob) {
+  const body = renderStoredJobBody(job, storedJob);
+  // The stored page is from the stopped run (often an agy failure), so it cannot say "cancelled" itself.
+  if (job.status === "cancelled" && storedJob) {
+    return `Cancelled: this job was stopped; the output below is from the stopped run.\n\n${body}`;
+  }
+  return body;
+}
+
+function renderStoredJobBody(job, storedJob) {
   const sessionId = storedJob?.sessionId ?? job.sessionId ?? null;
   const resumeCommand = sessionId ? `agy --conversation ${sessionId}` : null;
 

@@ -207,6 +207,8 @@ describe("review commands with fake agy", () => {
     const job = statusOf(jobId);
     assert.equal(job.status, "cancelled", job.summary);
     assert.equal(job.phase, "cancelled");
+    // The stored page is agy's failed run; result must say the job was cancelled, not only show that failure.
+    assert.match(run(["result", jobId]).stdout, /^Cancelled:/);
   });
 
   it("background: --scope working-tree stays working-tree in the worker", () => {
@@ -234,7 +236,8 @@ describe("review commands with fake agy", () => {
     const nogit = createTempDir("review-exit-worker-nogit-");
     try {
       // The parent passes its CLAUDE_PROJECT_DIR as the worker's --cwd; status finds the job through the same dir.
-      const opts = { cwd: nogit, env: { ...env, CLAUDE_PROJECT_DIR: nogit } };
+      // LC_ALL=C: the summary is git's own stderr, which git translates under other locales.
+      const opts = { cwd: nogit, env: { ...env, CLAUDE_PROJECT_DIR: nogit, LC_ALL: "C" } };
       const r = runCompanion(["review-worker", "--job-id", "review-throw-1", "--cwd", nogit], opts);
       assert.notEqual(r.status, 0);
       const job = JSON.parse(runCompanion(["status", "review-throw-1", "--json"], opts).stdout);

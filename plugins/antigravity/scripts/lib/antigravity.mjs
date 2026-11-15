@@ -22,13 +22,6 @@ import { resolveWorkspaceRoot } from "./workspace.mjs";
 // Shutdown handling (SIGTERM-based cancellation)
 // ---------------------------------------------------------------------------
 
-/**
- * Install a SIGTERM/SIGINT handler for background workers. /cancel SIGTERMs
- * the worker PID; this handler SIGTERMs the active agy subprocess, which does
- * its own graceful conversation cleanup. The in-flight runAgyPrint then
- * resolves through its normal close path, so the worker persists partial
- * output before exiting naturally.
- */
 let shutdownRequested = false;
 
 /** True once the worker got SIGTERM/SIGINT: its job was cancelled, so the agy exit that follows is no failure. */
@@ -36,6 +29,13 @@ export function isShutdownRequested() {
   return shutdownRequested;
 }
 
+/**
+ * Install a SIGTERM/SIGINT handler for background workers. /cancel SIGTERMs
+ * the worker PID; this handler SIGTERMs the active agy subprocess, which does
+ * its own graceful conversation cleanup. The in-flight runAgyPrint then
+ * resolves through its normal close path, so the worker persists partial
+ * output before exiting naturally.
+ */
 export function installShutdownHandler() {
   const handler = () => {
     if (shutdownRequested) return;
