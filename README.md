@@ -81,7 +81,7 @@ Use it when you want:
 - a review of your current uncommitted changes
 - a review of your branch compared to a base branch like `main`
 
-Use `--base <ref>` for branch review. It also supports `--wait` and `--background`. It is not steerable and does not take custom focus text. Use [`/antigravity:adversarial-review`](#antigravityadversarial-review) when you want to challenge a specific decision or risk area.
+Use `--base <ref>` for branch review. The ref must be a commit in the repository that shares history with HEAD; otherwise the command fails with a non-zero exit code. The same check applies to the default branch that branch review detects (the first local `main`, `master` or `trunk`, else `origin/HEAD`); when that branch does not exist, pass `--base <ref>` or `--scope working-tree`. A foreground review also exits 1 when agy fails or its output is not a usable review. It also supports `--wait` and `--background`. It is not steerable and does not take custom focus text. Use [`/antigravity:adversarial-review`](#antigravityadversarial-review) when you want to challenge a specific decision or risk area.
 
 Examples:
 
@@ -140,8 +140,8 @@ Examples:
 /antigravity:rescue investigate why the tests started failing
 /antigravity:rescue fix the failing test with the smallest safe patch
 /antigravity:rescue --resume apply the top fix from the last run
-/antigravity:rescue --model pro investigate the flaky integration test
-/antigravity:rescue --model flash fix the issue quickly
+/antigravity:rescue --model hydrogen-xhigh investigate the flaky integration test
+/antigravity:rescue --model argon fix the failing test with a second model
 /antigravity:rescue --background investigate the regression
 ```
 
@@ -153,11 +153,9 @@ Ask Antigravity to redesign the database connection to be more resilient.
 
 **Notes:**
 
-- if you do not pass `--model`, the plugin defaults to `Gemini 3.1 Pro (High)`.
-- if you say `flash`, the plugin maps that to `Gemini 3.5 Flash (High)`
-- if you say `pro`, the plugin maps that to `Gemini 3.1 Pro (High)`
-- if you say `sonnet`, the plugin maps that to `Claude Sonnet 4.6 (Thinking)`
-- if you say `opus`, the plugin maps that to `Claude Opus 4.6 (Thinking)`
+- if you do not pass `--model`, the plugin defaults to `gemini-4-hydrogen-high`.
+- if you say `hydrogen-xhigh`, the plugin maps that to `gemini-4-hydrogen-xhigh`
+- if you say `argon`, the plugin maps that to `gemini-4-argon-high`
 - follow-up rescue requests can continue the latest Antigravity task in the repo
 
 ### `/antigravity:status`
@@ -220,18 +218,13 @@ When the review gate is enabled, the plugin uses a `Stop` hook to run a targeted
 
 ## Models
 
-The default model is `Gemini 3.1 Pro (High)`. Pass `--model <alias>` to any review or rescue command:
+The default model is `gemini-4-hydrogen-high`. Pass `--model <alias>` to any review or rescue command:
 
-| Alias | Model |
+| Alias | Model (`agy models` id) |
 |---|---|
-| `pro` / `pro-high` (default) | Gemini 3.1 Pro (High) |
-| `pro-low` | Gemini 3.1 Pro (Low) |
-| `flash` / `flash-high` | Gemini 3.5 Flash (High) |
-| `flash-medium` | Gemini 3.5 Flash (Medium) |
-| `flash-low` | Gemini 3.5 Flash (Low) |
-| `sonnet` | Claude Sonnet 4.6 (Thinking) |
-| `opus` | Claude Opus 4.6 (Thinking) |
-| `gpt-oss` | GPT-OSS 120B (Medium) |
+| `hydrogen` (default) | `gemini-4-hydrogen-high` |
+| `hydrogen-xhigh` | `gemini-4-hydrogen-xhigh` |
+| `argon` | `gemini-4-argon-high` |
 
 Unknown values are passed to agy verbatim (for custom models defined in your agy settings). If agy does not recognize the model it would silently fall back to Flash Medium — the plugin detects this and fails the run instead.
 
@@ -270,22 +263,25 @@ This plugin mirrors the design of OpenAI's [codex-plugin-cc](https://github.com/
 | | Codex plugin | Antigravity plugin |
 |---|---|---|
 | **CLI** | [`@openai/codex`](https://developers.openai.com/codex/cli/) | `agy` (ships with [Antigravity](https://antigravity.google)) |
-| **Protocol** | JSON-RPC via Codex app server | `agy --print` subprocess, prompt via stdin |
+| **Protocol** | JSON-RPC via Codex app server | `agy --print <prompt>` subprocess, prompt as the `--print` value |
 | **Session model** | Managed by app server broker | Conversation IDs parsed from agy's per-job glog |
 | **Cancellation** | JSON-RPC cancel to app server | SIGTERM to worker → SIGTERM to agy child |
 | **Auth** | ChatGPT account or OpenAI API key | Google account via `~/.gemini` |
-| **Model aliases** | `spark` &rarr; `gpt-5.3-codex-spark` | `flash` &rarr; `Gemini 3.5 Flash (High)`, `pro` &rarr; `Gemini 3.1 Pro (High)` |
+| **Model aliases** | `spark` &rarr; `gpt-5.3-codex-spark` | `hydrogen` &rarr; `gemini-4-hydrogen-high`, `argon` &rarr; `gemini-4-argon-high` |
 
 Both plugins share the same user-facing command surface (`review`, `adversarial-review`, `rescue`, `status`, `result`, `cancel`, `setup`) and the same background job system with foreground/background execution, conversation resume, and a stop-hook review gate.
 
 ### How it works
 
-The plugin spawns `agy --print` as a child process with the prompt written to stdin. Each task gets its own agy invocation with:
+The plugin spawns `agy --print <prompt>` as a child process (agy 1.5.9 takes the prompt as the `--print` value and does not read stdin). A review prompt over 256 KB is written to a file in the review worktree, and agy is told to read it. Each task gets its own agy invocation with:
 
 - **Watchdog timeouts** — agy's `--print-timeout` is the primary bound; a Node watchdog at timeout+30s catches hung processes.
 - **Graceful cancellation** — background workers install a SIGTERM handler that forwards the signal to the active agy child. The cancel command sends SIGTERM to the worker first, waits up to 3 seconds for clean shutdown, and falls back to process tree termination.
 - **Partial output preservation** — if a task fails (timeout, rate limit, crash), any output accumulated before the failure is returned instead of being discarded.
 - **Review worktree isolation** — reviews run inside a disposable detached git worktree that mirrors the working state. agy has no read-only mode and auto-approves file writes in print mode; the worktree ensures stray writes never touch your real working tree.
+- **Review sandbox** — reviews also run with `--sandbox` and `toolPermission: proceed-in-sandbox`: commands run without prompts and without network, and writes outside the worktree, /tmp and one shared cargo target dir (`--add-dir`) fail.
+- **Progress** — background jobs record phases (`starting`, `running`, `finalizing`, then `done`, `failed` or `cancelled`). While agy runs, a heartbeat every 15 s writes the elapsed time, the tool-call count and agy's last activity to the job log; `/antigravity:status` shows the last lines.
+- **Cancelled stays cancelled** — a job that got cancel ends as `cancelled`, also when agy stops after the 3 s wait; `/antigravity:result` marks its output as from a stopped run.
 - **Conversation resume** — conversation IDs are parsed from agy's per-job glog and stored in job state so you can resume with `--resume-last` or directly with `agy --conversation <id>`.
 
 ## Antigravity Integration
@@ -308,7 +304,7 @@ Session resume now uses agy conversations: `agy --conversation <conversation-id>
 
 - Read-only **tasks** rely on prompt guidance plus post-run `git status` drift detection (with a prominent warning); only reviews get hard worktree isolation.
 - Review worktrees do not initialize git submodules; submodule content is absent from the worktree (the embedded diff still covers it).
-- No streaming progress: `/antigravity:status` shows the job log, not token-level streaming.
+- No token-level streaming: `/antigravity:status` shows phases and a 15 s heartbeat. The tool-call counts come from undocumented agy 1.5.9 log lines and can stop working with another agy version.
 - agy must be signed in via one interactive run before background jobs work.
 
 ## FAQ
@@ -321,7 +317,7 @@ If you only use Claude Code today and have not used Antigravity yet, you will ne
 
 ### Does the plugin use a separate runtime?
 
-No. This plugin spawns your local `agy` CLI as a subprocess using print mode (`--print`). There is no separate broker or app server — the plugin writes the prompt to agy's stdin and reads the result from stdout.
+No. This plugin spawns your local `agy` CLI as a subprocess using print mode (`--print`). There is no separate broker or app server — the plugin passes the prompt as the `--print` value and reads the result from stdout.
 
 That means:
 

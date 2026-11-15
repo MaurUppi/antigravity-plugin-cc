@@ -162,8 +162,8 @@ export function readAgyLog(agyLogFile) {
  * Run one agy print-mode invocation.
  *
  * @param {object} options
- * @param {string}  options.prompt           - written to stdin
- * @param {string}  [options.modelLabel]     - agy display label, passed to --model
+ * @param {string}  options.prompt           - passed as the --print value (argv)
+ * @param {string}  [options.modelLabel]     - agy display label or `agy models` id, passed to --model
  * @param {string}  [options.conversationId] - resume an existing conversation
  * @param {string}  [options.cwd]
  * @param {string}  [options.agyLogFile]     - per-run glog path (--log-file)
