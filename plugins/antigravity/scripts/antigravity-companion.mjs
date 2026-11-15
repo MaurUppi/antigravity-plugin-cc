@@ -21,7 +21,8 @@ import {
   runAntigravityTask,
   readOutputSchema,
   findLatestTaskSession,
-  installShutdownHandler
+  installShutdownHandler,
+  isShutdownRequested
 } from "./lib/antigravity.mjs";
 import {
   buildStatusSnapshot,
@@ -210,19 +211,26 @@ function hasReviewChanges(prompt) {
   return /^## (Staged changes|Unstaged changes|Untracked files|Diff|Commits)/m.test(prompt);
 }
 
+// cancel writes "cancelled" after a 3 s wait; a worker whose agy stops later must not overwrite it with "failed".
+function finalJobFields(failure, doneSummary) {
+  if (isShutdownRequested()) {
+    return { status: "cancelled", phase: "cancelled", summary: "Cancelled", completedAt: nowIso() };
+  }
+  return failure
+    ? { status: "failed", phase: "failed", summary: failure, completedAt: nowIso() }
+    : { status: "completed", phase: "done", summary: doneSummary, completedAt: nowIso() };
+}
+
 // A worker that throws must not leave its job "running" forever.
 async function failJobOnError(workspaceRoot, jobId, work) {
   try {
     await work();
   } catch (err) {
-    upsertJob(workspaceRoot, {
-      id: jobId,
-      status: "failed",
-      phase: "failed",
-      completedAt: nowIso(),
-      summary: err.message,
-      errorMessage: err.message
-    });
+    try {
+      upsertJob(workspaceRoot, { id: jobId, ...finalJobFields(err.message), errorMessage: err.message });
+    } catch (writeErr) {
+      process.stderr.write(`could not write the final status of job ${jobId}: ${writeErr.message}\n`);
+    }
     throw err;
   }
 }
@@ -294,7 +302,8 @@ async function handleReviewWorker(cwd, argv) {
 
 async function runReviewJob(workerCwd, workspaceRoot, jobId, options) {
   const kind = options.kind ?? "review";
-  const target = options.base ? { mode: "branch", base: options.base } : resolveReviewTarget(workerCwd);
+  // The parent already resolved the target: --base means branch, anything else means working tree.
+  const target = options.base ? { mode: "branch", base: options.base } : { mode: "working-tree" };
   const { prompt, targetLabel } = buildReviewPrompt(workerCwd, target, kind, options.focus);
   const reviewLabel = kind === "adversarial-review" ? "Adversarial Review" : "Review";
 
@@ -326,10 +335,7 @@ function finishReviewJob(workspaceRoot, jobId, result, { reviewLabel, targetLabe
   const failure = reviewFailureReason(result);
   upsertJob(workspaceRoot, {
     id: jobId,
-    status: failure ? "failed" : "completed",
-    completedAt: nowIso(),
-    phase: failure ? "failed" : "done",
-    summary: failure ?? result.parsed.summary,
+    ...finalJobFields(failure, failure ? null : result.parsed.summary),
     sessionId: result.sessionId
   });
 
@@ -522,14 +528,10 @@ async function runTaskJob(workerCwd, workspaceRoot, jobId, options) {
   });
 
   const rendered = renderTaskResult(result);
-  const now = nowIso();
 
   upsertJob(workspaceRoot, {
     id: jobId,
-    status: result.ok ? "completed" : "failed",
-    completedAt: now,
-    phase: result.ok ? "done" : "failed",
-    summary: result.ok ? "Task completed" : (result.failureMessage ?? "Task failed"),
+    ...finalJobFields(result.ok ? null : (result.failureMessage ?? "Task failed"), "Task completed"),
     sessionId: result.sessionId
   });
 

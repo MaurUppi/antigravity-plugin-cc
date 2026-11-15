@@ -41,7 +41,7 @@ const REVIEW_JSON = JSON.stringify({
  *
  * Behaviors: task-ok | review-ok | review-bad-shape | review-slow-tools |
  *            echo-args | model-fallback | fail | rate-limit | auth-error |
- *            hang | write-file
+ *            hang | slow-sigterm | write-file
  * The FAKE_AGY_BEHAVIOR env var overrides the baked-in behavior at run time.
  */
 function generateScript(behavior) {
@@ -112,6 +112,10 @@ if (BEHAVIOR === 'hang') {
 } else if (BEHAVIOR === 'review-bad-shape') {
   process.stdout.write('{"findings": []}');
   process.exit(0);
+} else if (BEHAVIOR === 'slow-sigterm') {
+  // Outlives cancel's 3 s wait: exits 4 s after the first SIGTERM.
+  process.on('SIGTERM', () => setTimeout(() => process.exit(143), 4000));
+  setTimeout(() => process.exit(1), 30000);
 } else if (BEHAVIOR === 'review-slow-tools') {
   // Real agy appends one safety-monitor line per tool call while it runs.
   const toolLine = 'I0101 00:00:01.000000 1 monitor.go:88] Monitor agy_tool_safety FINISHED: triggered=false, reason="allowed_tool", duration=5µs';

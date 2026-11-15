@@ -63,8 +63,13 @@ export function saveState(workspaceRoot, state) {
   // would read as an empty state and the next save would write back, losing every other job.
   // shortcut: no lock, so two writers can still lose one update; add a lockfile if jobs show stale status.
   const tmpFile = `${stateFile}.${process.pid}.tmp`;
-  fs.writeFileSync(tmpFile, `${JSON.stringify(pruned, null, 2)}\n`, "utf8");
-  fs.renameSync(tmpFile, stateFile);
+  try {
+    fs.writeFileSync(tmpFile, `${JSON.stringify(pruned, null, 2)}\n`, "utf8");
+    fs.renameSync(tmpFile, stateFile);
+  } catch (err) {
+    fs.rmSync(tmpFile, { force: true });
+    throw err;
+  }
 
   try {
     const entries = fs.readdirSync(stateDir);

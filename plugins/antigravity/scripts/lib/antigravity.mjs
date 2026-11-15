@@ -29,12 +29,17 @@ import { resolveWorkspaceRoot } from "./workspace.mjs";
  * resolves through its normal close path, so the worker persists partial
  * output before exiting naturally.
  */
-export function installShutdownHandler() {
-  let shuttingDown = false;
+let shutdownRequested = false;
 
+/** True once the worker got SIGTERM/SIGINT: its job was cancelled, so the agy exit that follows is no failure. */
+export function isShutdownRequested() {
+  return shutdownRequested;
+}
+
+export function installShutdownHandler() {
   const handler = () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    if (shutdownRequested) return;
+    shutdownRequested = true;
 
     const killed = killActiveAgyChild("SIGTERM");
     if (!killed) {

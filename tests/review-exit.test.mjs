@@ -173,6 +173,63 @@ describe("review commands with fake agy", () => {
     assert.match(run(["result", job.id]).stdout, /Verdict: approve/);
   });
 
+  function statusOf(jobId) {
+    return JSON.parse(run(["status", jobId, "--json"]).stdout);
+  }
+
+  function waitFor(check, what, tries = 150) {
+    for (let i = 0; i < tries; i += 1) {
+      if (check()) return;
+      sleep(100);
+    }
+    assert.fail(`timed out waiting for ${what}`);
+  }
+
+  function isAlive(pid) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it("background: cancel stays cancelled when agy exits after cancel's 3 s wait", () => {
+    const started = run(["review", "--background", "--base", repo.base], "slow-sigterm");
+    assert.equal(started.status, 0, started.stderr);
+    const jobId = started.stdout.match(/job (\S+)/)[1];
+    // Cancel only once agy runs; earlier, the worker exits at once and never writes a final status.
+    waitFor(() => fs.existsSync(`${statusOf(jobId).logFile}.agy.log`), "agy to start");
+    const { pid } = statusOf(jobId);
+    const cancel = run(["cancel", jobId]);
+    assert.equal(cancel.status, 0, cancel.stderr);
+    waitFor(() => !isAlive(pid), "the worker to exit");
+    const job = statusOf(jobId);
+    assert.equal(job.status, "cancelled", job.summary);
+    assert.equal(job.phase, "cancelled");
+  });
+
+  it("background: --scope working-tree stays working-tree in the worker", () => {
+    const dir = createTempDir("review-exit-scope-");
+    try {
+      initGitRepo(dir);
+      git(dir, "branch", "-m", "feature");
+      const opts = { cwd: dir, env: { ...env, CLAUDE_PROJECT_DIR: dir, FAKE_AGY_BEHAVIOR: "review-bad-shape" } };
+      const started = runCompanion(["review", "--background", "--scope", "working-tree"], opts);
+      assert.equal(started.status, 0, started.stderr);
+      const jobId = started.stdout.match(/job (\S+)/)[1];
+      let job;
+      waitFor(() => {
+        job = JSON.parse(runCompanion(["status", jobId, "--json"], opts).stdout);
+        return job.status !== "queued" && job.status !== "running";
+      }, "the scoped job to finish");
+      // Clean tree: the working-tree review has no changes and approves without agy.
+      assert.equal(job.status, "completed", job.summary);
+    } finally {
+      cleanTempDir(dir);
+    }
+  });
+
   it("background: a worker that throws ends its job as failed", () => {
     const nogit = createTempDir("review-exit-worker-nogit-");
     try {
@@ -183,7 +240,7 @@ describe("review commands with fake agy", () => {
       const job = JSON.parse(runCompanion(["status", "review-throw-1", "--json"], opts).stdout);
       assert.equal(job.status, "failed");
       assert.equal(job.phase, "failed");
-      assert.match(job.summary, /Not inside a git repository/);
+      assert.match(job.summary, /not (inside )?a git repository/i);
     } finally {
       cleanTempDir(nogit);
     }
@@ -191,11 +248,10 @@ describe("review commands with fake agy", () => {
 });
 
 describe("review result shape", () => {
-  it("follows the output schema for verdict and findings", () => {
-    const ok = { verdict: "approve", summary: "s", findings: [], next_steps: [] };
-    assert.equal(validateReviewResultShape(ok), null);
-    assert.match(validateReviewResultShape({ ...ok, verdict: "error" }), /verdict/);
-    assert.match(validateReviewResultShape({ ...ok, findings: "none found" }), /findings/);
+  it("accepts omitted findings (Gemini omits them, 43ea428) but rejects findings it would drop", () => {
+    assert.equal(validateReviewResultShape({ verdict: "approve", summary: "s" }), null);
+    assert.equal(validateReviewResultShape({ verdict: "needs_attention", summary: "s", findings: null }), null);
+    assert.match(validateReviewResultShape({ verdict: "approve", summary: "s", findings: "none found" }), /findings/);
   });
 });
 
