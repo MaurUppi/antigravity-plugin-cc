@@ -2,7 +2,7 @@
 
 ## 3.0.0
 
-Tested with agy 1.5.9. Earlier agy versions read the prompt from stdin and do not work with this release.
+Requires agy 1.5.9 (tested). Older agy versions that read the prompt from stdin are not supported.
 
 ### Breaking
 
@@ -13,20 +13,23 @@ Tested with agy 1.5.9. Earlier agy versions read the prompt from stdin and do no
   ids are accepted
 - The prompt is the `--print` value (agy 1.5.9 no longer reads stdin); review
   prompts over 256 KB go to a file in the review worktree
-- A review that cannot run now fails: a foreground review exits non-zero and a
-  background one ends as `failed`. Scripts that expected exit 0 must check the
-  exit code
+- Two cases that used to exit 0 with `approve` (or end as `completed`) now
+  fail: a `--base` or detected default branch that is not a commit sharing
+  history with HEAD, and review output without a string `verdict` and
+  `summary` or with non-array `findings`. A foreground review exits non-zero
+  and a background one ends as `failed`
 - Reviews need `REVIEW_CARGO_TARGET_DIR` (`lib/agy-cli.mjs`) to be creatable.
   It is currently a machine-specific path; on another machine every review
-  fails until it is changed
+  that runs agy fails until it is changed
 
 ### Features
 
 - Reviews run with `--sandbox`, `proceed-in-sandbox` and `--add-dir` for the
   shared cargo target dir; each run gets its own build dir in it, and run dirs
   older than 24 h are removed
-- Cargo test binaries started inside a review get a 120 s time limit
-  (`REVIEW_TEST_TIMEOUT_S`) through the cargo runner env var
+- On macOS, cargo test binaries started inside a review get a 120 s time limit
+  (`REVIEW_TEST_TIMEOUT_S`) through the cargo runner env var, unless that
+  variable is already set
 - Background jobs record phases (reviews: starting, running, finalizing;
   tasks: running) and a 15 s heartbeat with tool-call counts and agy's last
   activity; `/antigravity:status` shows them
