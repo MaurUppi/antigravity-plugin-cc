@@ -13,7 +13,7 @@ Requires agy 1.5.9 (tested). Older agy versions that read the prompt from stdin 
   ids are accepted
 - The prompt is the `--print` value (agy 1.5.9 no longer reads stdin); review
   prompts over 256 KB go to a file in the review worktree
-- Two cases that used to exit 0 with `approve` (or end as `completed`) now
+- Two cases that used to exit 0 (or end as `completed`) now
   fail: a `--base` or detected default branch that is not a commit sharing
   history with HEAD, and review output without a string `verdict` and
   `summary` or with non-array `findings`. A foreground review exits non-zero
