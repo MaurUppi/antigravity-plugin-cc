@@ -1,6 +1,6 @@
 {
   "name": "@anthropic/antigravity-plugin-cc",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "description": "Use Antigravity (agy) from Claude Code to review code or delegate tasks.",

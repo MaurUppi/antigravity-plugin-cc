@@ -1,25 +1,55 @@
 # Changelog
 
-## Unreleased (local, version still 2.0.0)
+## 3.0.0
 
-Breaking: the model aliases `pro`, `pro-low`, `flash`, `flash-medium`,
-`flash-low`, `sonnet`, `opus` and `gpt-oss` are gone. They are now passed to
-agy verbatim, which falls back and fails the run.
+Tested with agy 1.5.9. Earlier agy versions read the prompt from stdin and do not work with this release.
 
-- agy 1.5.9: the prompt is the `--print` value (agy no longer reads stdin);
-  review prompts over 256 KB go to a file in the review worktree
-- Model aliases `hydrogen` (default `gemini-4-hydrogen-high`),
-  `hydrogen-xhigh`, `argon`; `agy models` ids are accepted
-- Reviews run with `--sandbox`, `proceed-in-sandbox` and `--add-dir` for one
-  shared cargo target dir (`REVIEW_CARGO_TARGET_DIR` in `lib/agy-cli.mjs`,
-  currently a machine-specific path)
+### Breaking
+
+- The model aliases `pro`, `pro-low`, `flash`, `flash-medium`, `flash-low`,
+  `sonnet`, `opus` and `gpt-oss` are gone. They are now passed to agy
+  verbatim, which falls back and fails the run. New aliases: `hydrogen`
+  (default `gemini-4-hydrogen-high`), `hydrogen-xhigh`, `argon`; `agy models`
+  ids are accepted
+- The prompt is the `--print` value (agy 1.5.9 no longer reads stdin); review
+  prompts over 256 KB go to a file in the review worktree
+- A review that cannot run now fails: a foreground review exits non-zero and a
+  background one ends as `failed`. Scripts that expected exit 0 must check the
+  exit code
+- Reviews need `REVIEW_CARGO_TARGET_DIR` (`lib/agy-cli.mjs`) to be creatable.
+  It is currently a machine-specific path; on another machine every review
+  fails until it is changed
+
+### Features
+
+- Reviews run with `--sandbox`, `proceed-in-sandbox` and `--add-dir` for the
+  shared cargo target dir; each run gets its own build dir in it, and run dirs
+  older than 24 h are removed
+- Cargo test binaries started inside a review get a 120 s time limit
+  (`REVIEW_TEST_TIMEOUT_S`) through the cargo runner env var
+- Background jobs record phases (reviews: starting, running, finalizing;
+  tasks: running) and a 15 s heartbeat with tool-call counts and agy's last
+  activity; `/antigravity:status` shows them
+
+### Fixes
+
 - `--base` and the detected default branch must be commits that share history
-  with HEAD; otherwise the review fails instead of approving an empty diff
-- A foreground review that did not run or returned unusable output exits 1; a
-  background one ends as `failed`
-- Background jobs record phases and a 15 s heartbeat with tool-call counts
-- A cancelled job stays `cancelled`; `result` marks its output as from a
-  stopped run
+  with HEAD; before, a bad ref diffed against nothing and reported `approve`
+- A review whose output is not valid JSON with a string `verdict` and
+  `summary`, or whose `findings` is not an array, fails instead of reading as
+  "No material findings"
+- A worker that throws ends its job as `failed` instead of leaving it
+  `running`
+- A cancelled job stays `cancelled` when agy stops after cancel's 3 s wait;
+  `result` marks its output as from a stopped run
+- `--background --scope working-tree` no longer fails on a repo without a
+  default branch
+- A background review with no diff approves without running agy, like the
+  foreground review
+- Branch reviews run in a worktree at HEAD and no longer copy uncommitted
+  changes into it
+- `state.json` is written through a temp file and a rename, and heartbeats no
+  longer write it
 
 ## 2.0.0
 
