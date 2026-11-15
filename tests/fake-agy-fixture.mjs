@@ -39,8 +39,9 @@ const REVIEW_JSON = JSON.stringify({
  * reads the prompt from the --print value, writes realistic glog lines to --log-file,
  * and emits behavior-dependent stdout/exit codes.
  *
- * Behaviors: task-ok | review-ok | echo-args | model-fallback | fail |
- *            rate-limit | auth-error | hang | write-file
+ * Behaviors: task-ok | review-ok | review-bad-shape | review-slow-tools |
+ *            echo-args | model-fallback | fail | rate-limit | auth-error |
+ *            hang | write-file
  * The FAKE_AGY_BEHAVIOR env var overrides the baked-in behavior at run time.
  */
 function generateScript(behavior) {
@@ -108,6 +109,15 @@ if (BEHAVIOR === 'hang') {
 } else if (BEHAVIOR === 'review-ok') {
   process.stdout.write(REVIEW_JSON);
   process.exit(0);
+} else if (BEHAVIOR === 'review-bad-shape') {
+  process.stdout.write('{"findings": []}');
+  process.exit(0);
+} else if (BEHAVIOR === 'review-slow-tools') {
+  // Real agy appends one safety-monitor line per tool call while it runs.
+  const toolLine = 'I0101 00:00:01.000000 1 monitor.go:88] Monitor agy_tool_safety FINISHED: triggered=false, reason="allowed_tool", duration=5µs';
+  const sirLine = 'I0101 00:00:01.000000 1 monitor.go:90] Monitor sir_flash_lite FINISHED: triggered=false, reason="The agent is listing files with ls.", duration=1s';
+  setTimeout(() => fs.appendFileSync(logFile, toolLine + '\\n' + toolLine + '\\n' + sirLine + '\\n'), 50);
+  setTimeout(() => { process.stdout.write(REVIEW_JSON); process.exit(0); }, 600);
 } else if (BEHAVIOR === 'echo-args') {
   process.stdout.write(JSON.stringify({ args: args, prompt: prompt }));
   process.exit(0);

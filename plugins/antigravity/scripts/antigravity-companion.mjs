@@ -41,13 +41,16 @@ import {
   renderStatusReport,
   renderJobStatusReport,
   renderStoredJobResult,
-  renderCancelReport
+  renderCancelReport,
+  validateReviewResultShape
 } from "./lib/render.mjs";
 import { getConfig, setConfig, listJobs, upsertJob, writeJobFile } from "./lib/state.mjs";
 import {
   nowIso,
   createJobRecord,
-  createJobLogFile
+  createJobLogFile,
+  createJobProgressUpdater,
+  createProgressReporter
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
@@ -185,10 +188,23 @@ async function executeReviewForeground(cwd, target, kind, options = {}) {
     { reviewLabel, targetLabel, reasoningSummary: result.reasoningSummary }
   );
   process.stdout.write(output);
-  // An empty or unparsable answer is not a review; callers must not read it as "no findings".
-  if (!result.parsed) {
+  if (reviewFailureReason(result)) {
     process.exitCode = 1;
   }
+}
+
+// An empty, unparsable or wrongly shaped answer is not a review; callers must not read it as "no findings".
+// Foreground exit code and background job status both use this, so the two never disagree.
+function reviewFailureReason(result) {
+  if (!result.ok || !result.parsed) {
+    return result.parseError ?? "Review failed";
+  }
+  return validateReviewResultShape(result.parsed);
+}
+
+// Writes progress to the job log (the worker's stderr already goes there) and phase/summary to job state.
+function jobProgressReporter(workspaceRoot, jobId, logFile) {
+  return createProgressReporter({ logFile, onProgress: createJobProgressUpdater(workspaceRoot, jobId), stderr: false });
 }
 
 function executeReviewBackground(cwd, target, kind, options = {}) {
@@ -261,11 +277,13 @@ async function handleReviewWorker(cwd, argv) {
   const { prompt, targetLabel } = buildReviewPrompt(workerCwd, target, kind, options.focus);
   const reviewLabel = kind === "adversarial-review" ? "Adversarial Review" : "Review";
 
+  const logFile = jobRecord?.logFile ?? null;
   const result = await runAntigravityReview(workerCwd, {
     prompt,
     model: options.model,
     workspaceRoot,
-    logFile: jobRecord?.logFile ?? null,
+    logFile,
+    onProgress: jobProgressReporter(workspaceRoot, jobId, logFile),
     jobId,
     mirror: target.mode !== "branch"
   });
@@ -275,13 +293,13 @@ async function handleReviewWorker(cwd, argv) {
     { reviewLabel, targetLabel, reasoningSummary: result.reasoningSummary }
   );
 
-  const now = nowIso();
+  const failure = reviewFailureReason(result);
   upsertJob(workspaceRoot, {
     id: jobId,
-    status: result.ok ? "completed" : "failed",
-    completedAt: now,
-    phase: result.ok ? "done" : "failed",
-    summary: result.parsed?.summary ?? (result.ok ? "Review completed" : "Review failed"),
+    status: failure ? "failed" : "completed",
+    completedAt: nowIso(),
+    phase: failure ? "failed" : "done",
+    summary: failure ?? result.parsed.summary,
     sessionId: result.sessionId
   });
 
@@ -289,7 +307,7 @@ async function handleReviewWorker(cwd, argv) {
     result: { parsed: result.parsed, parseError: result.parseError, rawOutput: result.rawOutput },
     rendered,
     sessionId: result.sessionId,
-    errorMessage: result.ok ? null : result.parseError
+    errorMessage: failure
   });
 }
 
@@ -460,6 +478,7 @@ async function handleTaskWorker(cwd, argv) {
   const write = !options["read-only"];
 
   const jobRecord = listJobs(workspaceRoot).find((j) => j.id === jobId);
+  const logFile = jobRecord?.logFile ?? null;
 
   const result = await runAntigravityTask(workerCwd, {
     prompt: options.prompt,
@@ -468,7 +487,8 @@ async function handleTaskWorker(cwd, argv) {
     resume: options.resume,
     jobId,
     workspaceRoot,
-    logFile: jobRecord?.logFile ?? null
+    logFile,
+    onProgress: jobProgressReporter(workspaceRoot, jobId, logFile)
   });
 
   const rendered = renderTaskResult(result);

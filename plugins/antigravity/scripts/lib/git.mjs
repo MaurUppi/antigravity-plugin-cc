@@ -56,8 +56,15 @@ export function getCurrentBranch(cwd) {
 export function resolveReviewTarget(cwd, options = {}) {
   const explicitBase = options.base ?? null;
   const explicitScope = options.scope ?? "auto";
+  ensureGitRepository(cwd);
 
   if (explicitBase) {
+    // A base git cannot resolve yields an empty diff, which the caller reports as "approve".
+    // The ^{commit} peel matters: without it `rev-parse --verify` accepts any 40-hex string.
+    const check = git(["rev-parse", "--verify", "--quiet", `${explicitBase}^{commit}`], { cwd });
+    if (check.status !== 0) {
+      throw new Error(`--base ${explicitBase} is not a commit in this repository.`);
+    }
     return { mode: "branch", base: explicitBase };
   }
 

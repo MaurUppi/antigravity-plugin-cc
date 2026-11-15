@@ -5,6 +5,7 @@ import {
   runAgyPrint,
   killActiveAgyChild,
   parseAgyLog,
+  parseAgyActivity,
   readAgyLog,
   DEFAULT_PRINT_TIMEOUT_MS,
   REVIEW_CARGO_TARGET_DIR
@@ -221,6 +222,33 @@ function watchConversationId(agyLogFile, onFound) {
   return stop;
 }
 
+const PROGRESS_INTERVAL_MS = 15_000;
+
+/**
+ * While agy runs, report elapsed time, tool-call count and agy's last activity
+ * description every intervalMs, so `status` shows a background job is alive.
+ * No-op without onProgress (foreground runs).
+ */
+function startHeartbeat(agyLogFile, onProgress, intervalMs) {
+  if (!onProgress) {
+    return () => {};
+  }
+  const startedAt = Date.now();
+  const timer = setInterval(() => {
+    try {
+      const { toolCalls, lastActivity } = parseAgyActivity(readAgyLog(agyLogFile));
+      const seconds = Math.round((Date.now() - startedAt) / 1000);
+      const activity = lastActivity ? `; last activity: ${lastActivity}` : "";
+      onProgress({ message: `agy running ${seconds}s: ${toolCalls} tool calls${activity}`, phase: "running" });
+    } catch (err) {
+      // A failed progress write must not kill the run; the error still reaches the job log via stderr.
+      process.stderr.write(`progress update failed: ${err.message}\n`);
+    }
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 /**
  * Run an Antigravity task via agy print mode.
  *
@@ -254,7 +282,8 @@ export async function runAntigravityTask(cwd, options = {}) {
     timeoutMs,
     skipWriteDetection = false,
     sandbox = false,
-    binary
+    binary,
+    progressIntervalMs = PROGRESS_INTERVAL_MS
   } = options;
 
   const resolvedModel = resolveModel(model) ?? DEFAULT_MODEL;
@@ -281,6 +310,7 @@ export async function runAntigravityTask(cwd, options = {}) {
   }
 
   const stopWatching = watchConversationId(agyLogFile, persistConversationId);
+  const stopHeartbeat = startHeartbeat(agyLogFile, onProgress, progressIntervalMs);
 
   let run;
   try {
@@ -298,6 +328,7 @@ export async function runAntigravityTask(cwd, options = {}) {
     });
   } finally {
     stopWatching();
+    stopHeartbeat();
   }
 
   if (run.stdout) {
@@ -448,8 +479,9 @@ export function sweepStaleRunTargetDirs(root = REVIEW_CARGO_TARGET_DIR, maxAgeMs
 }
 
 export async function runAntigravityReview(cwd, options = {}) {
-  const { prompt, model, timeoutMs, logFile, onProgress, env, workspaceRoot, jobId, binary, mirror = true } = options;
+  const { prompt, model, timeoutMs, logFile, onProgress, env, workspaceRoot, jobId, binary, mirror = true, progressIntervalMs } = options;
   const effectiveWorkspaceRoot = workspaceRoot ?? resolveWorkspaceRoot(cwd);
+  onProgress?.({ message: "preparing review worktree", phase: "starting" });
 
   try {
     sweepOrphanedWorktrees(effectiveWorkspaceRoot);
@@ -495,6 +527,7 @@ export async function runAntigravityReview(cwd, options = {}) {
       workspaceRoot: effectiveWorkspaceRoot,
       timeoutMs,
       jobId,
+      progressIntervalMs,
       ...(binary ? { binary } : {})
     });
   } finally {
@@ -531,6 +564,7 @@ export async function runAntigravityReview(cwd, options = {}) {
     };
   }
 
+  onProgress?.({ message: "parsing review output", phase: "finalizing" });
   const structured = parseStructuredOutput(rawOutput);
   if (isolationNote) {
     if (structured.parsed && typeof structured.parsed.summary === "string") {
