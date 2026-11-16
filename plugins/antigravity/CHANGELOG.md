@@ -30,6 +30,12 @@ Requires agy 1.5.9 (tested). Older agy versions that read the prompt from stdin 
 - On macOS, cargo test binaries started inside a review get a 120 s time limit
   (`REVIEW_TEST_TIMEOUT_S`) through the cargo runner env var, unless that
   variable is already set
+- `/antigravity:review` now accepts optional trailing focus text (`{{USER_FOCUS}}`),
+  matching `/antigravity:adversarial-review`
+- Review and adversarial-review prompts now document the terminal sandbox rules,
+  offline Cargo flags (`--locked --offline`), and socket-test timeouts
+- `antigravity-rescue` and `antigravity-cli-runtime` drop `--effort` and document
+  the `hydrogen` / `hydrogen-xhigh` / `argon` model aliases
 - Background jobs record phases (reviews: starting, running, finalizing;
   tasks: running) and a 15 s heartbeat with tool-call counts and agy's last
   activity; `/antigravity:status` shows them
@@ -53,6 +59,8 @@ Requires agy 1.5.9 (tested). Older agy versions that read the prompt from stdin 
   changes into it
 - `state.json` is written through a temp file and a rename, and heartbeats no
   longer write it
+- Progress callbacks are guarded so a failing log or state write does not end
+  a run or drop a completed review
 
 ## 2.0.0
 

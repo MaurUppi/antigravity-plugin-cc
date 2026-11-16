@@ -3,7 +3,7 @@
 Use Antigravity (agy) from inside Claude Code for code reviews or to delegate tasks.
 
 This plugin is for Claude Code users who want an easy way to use Google's Antigravity
-models from the workflow they already have. This is the 2.0 rebrand of gemini-plugin-cc — the deprecated Gemini CLI backend was replaced with Antigravity's `agy`.
+models from the workflow they already have. Originally rebranded from `gemini-plugin-cc` in 2.0 (replacing the deprecated Gemini CLI backend with Antigravity's `agy`), it is now at 3.0.0 with `agy 1.5.9` print-mode and sandboxed review hardening.
 
 ## What You Get
 
@@ -13,8 +13,8 @@ models from the workflow they already have. This is the 2.0 rebrand of gemini-pl
 
 ## Requirements
 
-- **Antigravity** with a signed-in Google account.
-  - The `agy` CLI ships with [Antigravity](https://antigravity.google). Usage counts against your Antigravity limits.
+- **Antigravity (`agy` 1.5.9)** with a signed-in Google account.
+  - The `agy` CLI ships with [Antigravity](https://antigravity.google). Usage counts against your Antigravity limits. Older `agy` versions that read the prompt from stdin are not supported.
 - **Node.js 18.18 or later**
 - **git** (reviews run inside disposable git worktrees)
 
@@ -81,13 +81,25 @@ Use it when you want:
 - a review of your current uncommitted changes
 - a review of your branch compared to a base branch like `main`
 
-Use `--base <ref>` for branch review. The ref must be a commit in the repository that shares history with HEAD; otherwise the command fails with a non-zero exit code. The same check applies to the default branch that branch review detects (the first local `main`, `master` or `trunk`, else `origin/HEAD`); when that branch does not exist, pass `--base <ref>` or `--scope working-tree`. A foreground review also exits 1 when agy fails or its output is not a usable review. It also supports `--wait` and `--background`. It is not steerable and does not take custom focus text. Use [`/antigravity:adversarial-review`](#antigravityadversarial-review) when you want to challenge a specific decision or risk area.
+Use `--base <ref>` for branch review. The ref must be a commit in the repository that shares history with HEAD; otherwise the command fails with a non-zero exit code. The same check applies to the default branch that branch review detects (the first local `main`, `master` or `trunk`, else `origin/HEAD`, falling back to `main`); when that branch does not exist or shares no history with HEAD, pass `--base <ref>` or `--scope working-tree`.
+
+Supported flags:
+
+- `--base <ref>` — compare `HEAD` against `<ref>`
+- `--scope <auto|working-tree|branch>` — defaults to `auto` (working tree if dirty, else branch diff against the detected default branch when on another branch, else working tree)
+- `--model <alias|id>` — override the model (see [Models](#models))
+- `--wait` / `--background` — force foreground or background execution (when omitted, the slash command asks after checking repo size; the CLI runs foreground only when at most 2 files changed and diff stats are under 60 characters)
+- `--timeout-ms <ms>` — foreground print timeout (default: 15 minutes)
+
+Any text after the flags is passed as focus text (for example an audit axis brief) and added to the review prompt. Use [`/antigravity:adversarial-review`](#antigravityadversarial-review) when you want the design-challenge prompt instead of a defect review. Working-tree mode embeds up to 20 untracked files (24 KB max per file). An empty diff approves immediately without running `agy` in both foreground and background modes. A foreground review exits 1 (and a background review ends as `failed`) when `agy` fails or its output is not valid JSON with non-empty string `verdict` and `summary` (and an array `findings` when present).
 
 Examples:
 
 ```bash
 /antigravity:review
 /antigravity:review --base main
+/antigravity:review --scope working-tree
+/antigravity:review --base main check error handling and concurrency
 /antigravity:review --background
 ```
 
@@ -99,8 +111,7 @@ Runs a **steerable** review that questions the chosen implementation and design.
 
 It can be used to pressure-test assumptions, tradeoffs, failure modes, and whether a different approach would have been safer or simpler.
 
-It uses the same review target selection as `/antigravity:review`, including `--base <ref>` for branch review.
-It also supports `--wait` and `--background`. Unlike `/antigravity:review`, it can take extra focus text after the flags.
+It uses the same review target selection (`--base <ref>`, `--scope <auto|working-tree|branch>`), `--model`, `--wait`, `--background`, `--timeout-ms`, worktree isolation, and sandbox rules as `/antigravity:review`. Like `/antigravity:review`, it takes optional trailing focus text after the flags.
 
 Use it when you want:
 
@@ -132,7 +143,7 @@ Use it when you want Antigravity to:
 > [!NOTE]
 > Depending on the task and the model you choose these tasks might take a long time and it's generally recommended to force the task to be in the background or move the agent to the background.
 
-It supports `--background`, `--wait`, `--resume`, and `--fresh`. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo.
+It supports `--background`, `--wait`, `--model <alias|id>`, `--resume`, and `--fresh`. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo. By default the `antigravity:antigravity-rescue` subagent delegates with write access (`--write`); ask for read-only behavior (or pass `--read-only` on the CLI) to prepend a read-only guard and run before/after `git status` drift detection. Any `--effort` flag is stripped and ignored.
 
 Examples:
 
@@ -160,12 +171,13 @@ Ask Antigravity to redesign the database connection to be more resilient.
 
 ### `/antigravity:status`
 
-Shows running and recent Antigravity jobs for the current repository.
+Shows running and recent Antigravity jobs for the current repository (phases and 15 s heartbeat previews). Pass `[job-id]` (full ID or unique prefix) for single-job details with up to 10 log lines, or `--all` to list all finished jobs instead of the 8 most recent.
 
 Examples:
 
 ```bash
 /antigravity:status
+/antigravity:status --all
 /antigravity:status task-abc123
 ```
 
@@ -177,7 +189,7 @@ Use it to:
 
 ### `/antigravity:result`
 
-Shows the final stored Antigravity output for a finished job.
+Shows the final stored Antigravity output for a finished job (defaults to the latest finished job in the current session, or pass `[job-id]` / unique prefix). Cancelled jobs are prefixed with a notice that the output comes from a stopped run.
 When available, it also includes the agy conversation ID so you can reopen that run directly in Antigravity with `agy --conversation <conversation-id>`.
 
 Examples:
@@ -189,7 +201,7 @@ Examples:
 
 ### `/antigravity:cancel`
 
-Gracefully cancels an active background Antigravity job. The plugin sends a cancel signal to the running job, waits for the worker to persist any partial output, and then confirms cancellation. If the worker does not exit cleanly within 3 seconds, it is force-terminated.
+Gracefully cancels an active background Antigravity job (pass `[job-id]` or unique prefix; optional when only one job is active). The plugin sends a cancel signal to the running job, waits for the worker to persist any partial output, and then confirms cancellation. If the worker does not exit cleanly within 3 seconds, it is force-terminated.
 
 Examples:
 
@@ -279,8 +291,8 @@ The plugin spawns `agy --print <prompt>` as a child process (agy 1.5.9 takes the
 - **Graceful cancellation** — background workers install a SIGTERM handler that forwards the signal to the active agy child. The cancel command sends SIGTERM to the worker first, waits up to 3 seconds for clean shutdown, and falls back to process tree termination.
 - **Partial output preservation** — if a task fails (timeout, rate limit, crash), any output accumulated before the failure is returned instead of being discarded.
 - **Review worktree isolation** — reviews run inside a disposable detached git worktree: at HEAD plus your uncommitted changes for a working-tree review, at HEAD for a branch review. agy has no read-only mode and auto-approves file writes in print mode; the worktree ensures stray writes never touch your real working tree.
-- **Review sandbox** — reviews also run with `--sandbox` and `toolPermission: proceed-in-sandbox`: commands run without prompts and without network, and writes outside the worktree, /tmp and one shared cargo target dir (`--add-dir`) fail.
-- **Progress** — background reviews record the phases `starting`, `running`, `finalizing`; background tasks record `running`. Both end with `done`, `failed` or `cancelled`. While agy runs, a heartbeat every 15 s writes the elapsed time, the tool-call count and agy's last activity to the job log; `/antigravity:status` shows the last lines.
+- **Review sandbox** — reviews also run with `--sandbox` and `toolPermission: proceed-in-sandbox`: commands run without prompts and without network, and writes outside the worktree, `/tmp` and `REVIEW_CARGO_TARGET_DIR` (`--add-dir`) fail. Each review gets its own `run-*` build dir under `REVIEW_CARGO_TARGET_DIR` (removed on normal finish, kept on failure, stale dirs over 24 h swept). On macOS, `sandboxEnv` sets `CARGO_TARGET_<ARCH>_APPLE_DARWIN_RUNNER` (unless already set) to enforce a 120 s `SIGALRM` limit on Cargo test/example binaries.
+- **Progress** — background reviews record the phases `starting`, `running`, `finalizing`; background tasks record `running`. Both end with `done`, `failed` or `cancelled`. While agy runs, a heartbeat every 15 s writes the elapsed time, the tool-call count and agy's last activity to the job log; `/antigravity:status` shows the last lines. `state.json` is written atomically via temp file + rename only on phase changes (retaining up to 50 jobs).
 - **Cancelled stays cancelled** — a job that got cancel ends as `cancelled`, also when agy stops after the 3 s wait; `/antigravity:result` marks its output as from a stopped run.
 - **Conversation resume** — conversation IDs are parsed from agy's per-job glog and stored in job state so you can resume with `--resume-last` or directly with `agy --conversation <id>`.
 
@@ -302,9 +314,13 @@ Session resume now uses agy conversations: `agy --conversation <conversation-id>
 
 ## Known limitations
 
+- Requires `agy` 1.5.9 (tested); older versions that read prompts from stdin are not supported.
+- `REVIEW_CARGO_TARGET_DIR` (`plugins/antigravity/scripts/lib/agy-cli.mjs`) is currently hardcoded to a machine-specific path (`/Volumes/P5800X/.tmp/agy-review-target`); on another machine where that path cannot be created, every sandboxed review fails until it is changed.
+- Only review prompts (>256 KB) spill to a file; non-review task prompts are passed in `--print` argv, so task prompts exceeding OS `ARG_MAX` (~1 MB on macOS) fail to spawn (`E2BIG`).
 - Read-only **tasks** rely on prompt guidance plus post-run `git status` drift detection (with a prominent warning); only reviews get hard worktree isolation.
 - Review worktrees do not initialize git submodules; submodule content is absent from the worktree (the embedded diff still covers it).
-- No token-level streaming: `/antigravity:status` shows phases and a 15 s heartbeat. The tool-call counts come from undocumented agy 1.5.9 log lines and can stop working with another agy version.
+- No token-level streaming: `/antigravity:status` shows phases and a 15 s heartbeat. Tool-call counts come from undocumented agy 1.5.9 log lines (and freeze once `.agy.log` exceeds 5 MB) and can stop working with another agy version.
+- `state.json` uses atomic renames without a file lock, `MAX_JOBS` (50) pruning can drop older jobs, and `/antigravity:result` exits 0 when displaying a failed or cancelled job.
 - agy must be signed in via one interactive run before background jobs work.
 
 ## FAQ
