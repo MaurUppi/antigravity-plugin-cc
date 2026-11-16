@@ -23,7 +23,7 @@ models from the workflow they already have. Originally rebranded from `gemini-pl
 Add the marketplace in Claude Code:
 
 ```bash
-/plugin marketplace add btli/antigravity-plugin-cc
+/plugin marketplace add MaurUppi/antigravity-plugin-cc
 ```
 
 Install the plugin:
